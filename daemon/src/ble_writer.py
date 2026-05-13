@@ -59,9 +59,11 @@ class BleWriter:
     async def _scan_and_connect(self) -> bool:
         """Returns True if connected, False if scan timed out / no device."""
         log.info("scanning for %r...", DEVICE_NAME)
-        device = await BleakScanner.find_device_by_filter(
-            lambda d, ad: d.name == DEVICE_NAME, timeout=15
-        )
+        # macOS CoreBluetooth surfaces the device name via either d.name (when
+        # paired/cached) or adv.local_name (fresh advertisement). Check both.
+        def _matches(d, adv) -> bool:
+            return d.name == DEVICE_NAME or (adv and adv.local_name == DEVICE_NAME)
+        device = await BleakScanner.find_device_by_filter(_matches, timeout=15)
         if device is None:
             return False
 
