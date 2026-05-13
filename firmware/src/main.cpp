@@ -6,7 +6,6 @@
 #include "data.h"
 #include "ui_meter.h"
 #include "ui_pager.h"
-#include "ui_ble_page.h"
 #include "auto_rotate.h"
 #include "ble_peer.h"
 #include "ble_hid.h"
@@ -80,14 +79,12 @@ void setup() {
     lv_indev_set_read_cb(indev, touch_read_cb);
 
     g_meter = ui_meter::build(lv_scr_act());
-    lv_obj_t* ble_screen = ui_ble_page::build(lv_scr_act());
-    ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen, ble_screen);
+    ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen);
     // Register gesture handler on each meter screen — events don't bubble from
     // child widgets to lv_scr_act() automatically; the screen widgets themselves
     // own the touch area, so we attach there.
     lv_obj_add_event_cb(g_meter.claude_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_add_event_cb(g_meter.codex_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
-    lv_obj_add_event_cb(ble_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     splash::init(lv_scr_act());
     rotate::reset(g_rotate, millis());
@@ -128,11 +125,8 @@ void loop() {
 
     bool show_7d = (rotate::current(g_rotate, millis()) == rotate::Frame::SevenDay);
     ui_meter::refresh(g_meter, g_state, show_7d);
-    ui_ble_page::refresh(ble_peer::is_connected());
 
-    // Pager auto-rotation: cycle Claude -> Codex -> Bluetooth every 10s.
-    // on_swipe_left already implements the wrap; reuse it so manual swipes and
-    // the timer agree on direction.
+    // Pager auto-rotation: cycle Claude <-> Codex every 10s.
     static uint32_t last_page_swap = 0;
     constexpr uint32_t PAGE_SWAP_INTERVAL = 10000;  // ms
     uint32_t now = millis();
