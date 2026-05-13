@@ -76,6 +76,8 @@ def _do_request(method: str, url: str, headers: dict[str, str], body: bytes) -> 
 
 def probe_claude(token: str, now_epoch: int | None = None) -> ClaudeResult:
     """One probe round-trip. Returns the BLE payload shape regardless of error."""
+    import logging
+    log = logging.getLogger("clawdmeter.claude")
     if now_epoch is None:
         now_epoch = int(time.time())
 
@@ -93,11 +95,19 @@ def probe_claude(token: str, now_epoch: int | None = None) -> ClaudeResult:
     }).encode("utf-8")
 
     try:
-        status, resp_headers, _raw = _do_request("POST", "https://api.anthropic.com/v1/messages", headers, body)
-    except Exception:
+        status, resp_headers, raw_body = _do_request("POST", "https://api.anthropic.com/v1/messages", headers, body)
+    except Exception as e:
+        log.warning("network error: %s", e)
         return ClaudeResult({"s": 0, "sr": 0, "w": 0, "wr": 0, "st": "unknown", "ok": False})
 
     if status >= 400:
+        # Body is Anthropic's JSON error message (small, safe to log — no secrets).
+        log.warning("HTTP %d from anthropic: %s", status,
+                    raw_body[:200].decode("utf-8", errors="replace"))
+        # Rate-limit headers may still be present on 4xx — try to parse anyway.
+        result = parse_anthropic_headers(resp_headers, now_epoch)
+        if result["ok"]:
+            return result
         return ClaudeResult({"s": 0, "sr": 0, "w": 0, "wr": 0, "st": "unknown", "ok": False})
 
     return parse_anthropic_headers(resp_headers, now_epoch)
