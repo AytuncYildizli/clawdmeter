@@ -34,3 +34,11 @@ First run will trigger macOS Bluetooth permission prompt — accept it.
 cp launchd/sh.clawdmeter.daemon.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/sh.clawdmeter.daemon.plist
 ```
+
+## Integration testing
+
+Plan #2 Task 10 (bumble virtual peripheral) was skipped: bumble's virtual
+transports are flaky on macOS and we have real M5Stack Core 2 hardware. End-to-end
+BLE testing happens in Plan #3 Task 9 (firmware integration) against the real
+device. Until firmware lands, `python -m clawdmeter` will scan, find nothing, and
+sit in the reconnect loop — that's the expected pre-firmware state.
