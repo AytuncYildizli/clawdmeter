@@ -157,27 +157,27 @@ void refresh_battery(ScreenWidgets& w) {
 
 void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
                  const data::FocusBlock& focus, const char* provider_name,
-                 lv_color_t accent, bool is_active_pager, bool show_7d) {
+                 lv_color_t accent, bool is_active_pager, bool /*show_7d*/) {
     char buf[64];
 
-    // Provider tag: "CLAUDE | weekly" or "CLAUDE | 5h" (ASCII pipe; Montserrat
-    // subset lacks U+00B7 middle dot and renders it as a missing-glyph box).
-    std::snprintf(buf, sizeof(buf), "%s | %s", provider_name, show_7d ? "weekly" : "5h");
+    // Provider tag: always "CLAUDE | weekly". 5h sits at the bottom as a small
+    // secondary tick. Per user request 2026-05-13: no 5h/7d auto-rotate in the
+    // big number; weekly is the primary, 5h is glance info.
+    std::snprintf(buf, sizeof(buf), "%s | weekly", provider_name);
     lv_label_set_text(w.provider_tag, buf);
 
-    // Big number
+    // Big number = weekly utilization
     if (!block.ok) {
         lv_label_set_text(w.big_number, "--");
     } else {
-        int v = show_7d ? block.w : block.s;
-        std::snprintf(buf, sizeof(buf), "%d%%", v);
+        std::snprintf(buf, sizeof(buf), "%d%%", block.w);
         lv_label_set_text(w.big_number, buf);
     }
 
-    // Progress bar — reflects the active frame's percentage.
+    // Progress bar = weekly utilization
     if (block.ok) {
         lv_obj_clear_flag(w.progress_bar, LV_OBJ_FLAG_HIDDEN);
-        int v = show_7d ? block.w : block.s;
+        int v = block.w;
         if (v < 0) v = 0;
         if (v > 100) v = 100;
         lv_bar_set_value(w.progress_bar, v, LV_ANIM_ON);
@@ -186,20 +186,18 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
         lv_bar_set_value(w.progress_bar, 0, LV_ANIM_OFF);
     }
 
-    // Reset countdown for the active frame
+    // Reset countdown = weekly reset
     if (block.ok) {
-        int mins = show_7d ? block.wr : block.sr;
+        int mins = block.wr;
         std::snprintf(buf, sizeof(buf), "resets in %dh %dm", mins / 60, mins % 60);
         lv_label_set_text(w.reset_label, buf);
     } else {
         lv_label_set_text(w.reset_label, "");
     }
 
-    // Secondary tick: the OTHER frame at a glance
+    // Secondary tick = the 5h glance ("5h X%")
     if (block.ok) {
-        int v2 = show_7d ? block.s : block.w;
-        const char* lbl = show_7d ? "5h" : "weekly";
-        std::snprintf(buf, sizeof(buf), "%s %d%%", lbl, v2);
+        std::snprintf(buf, sizeof(buf), "5h %d%%", block.s);
         lv_label_set_text(w.secondary_tick, buf);
     } else {
         lv_label_set_text(w.secondary_tick, "");

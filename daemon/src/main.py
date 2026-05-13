@@ -18,6 +18,7 @@ from pathlib import Path
 from .ble_writer import BleWriter
 from .claude_probe import probe_claude
 from .codex_stub import codex_stub
+from .codex_probe import probe_codex
 from .superset_state import read_focus, FocusInfo
 from .state import State
 
@@ -133,7 +134,9 @@ class Orchestrator:
                              block.get("ok"), block.get("s"),
                              block.get("w"), block.get("st"))
                     self.state.update_claude(block)
-                    self.state.update_codex(codex_stub())
+                    # Codex via local-SQLite-tail workaround (codex_probe). Falls
+                    # back to stub-shape ok=False if no fresh data found.
+                    self.state.update_codex(probe_codex())
                     self._dirty.set()
                 except Exception as e:
                     log.warning("claude probe failed: %s", e)
