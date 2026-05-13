@@ -7,6 +7,7 @@
 #include "ui_meter.h"
 #include "ui_pager.h"
 #include "auto_rotate.h"
+#include "ble_peer.h"
 
 // LVGL display buffer — partial mode, 10 scanlines wide.
 static lv_display_t* g_disp;
@@ -71,13 +72,18 @@ void setup() {
     lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     rotate::reset(g_rotate, millis());
 
-    // Stub state for visual verification before BLE lands.
+    // Stub state for visual verification before first BLE payload arrives.
     g_state.claude = { 71, 134, 38, 6240, "allow", true };
     g_state.codex  = { 0, 0, 0, 0, "unavailable", false };
     g_state.focus.agent = data::AgentKind::Claude;
     std::strcpy(g_state.focus.repo, "rotator");
     g_state.focus.sessions = 2;
     g_state.initialized = true;
+
+    ble_peer::begin([](const data::PayloadState& parsed) {
+        g_state = parsed;
+    });
+    ble_peer::request_refresh();  // ask daemon for current state on boot
 }
 
 void loop() {
