@@ -166,21 +166,28 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
     std::snprintf(buf, sizeof(buf), "%s | weekly", provider_name);
     lv_label_set_text(w.provider_tag, buf);
 
-    // Big number = weekly utilization
+    // Convert USED% (what daemon sends) to LEFT% (what we display). Matches
+    // Codex `/status` and feels like a fuel/battery gauge: 100% left = fresh,
+    // 0% left = exhausted.
+    int weekly_left = block.ok ? (100 - block.w) : 0;
+    int hourly_left = block.ok ? (100 - block.s) : 0;
+    if (weekly_left < 0) weekly_left = 0;
+    if (weekly_left > 100) weekly_left = 100;
+    if (hourly_left < 0) hourly_left = 0;
+    if (hourly_left > 100) hourly_left = 100;
+
+    // Big number = weekly LEFT
     if (!block.ok) {
         lv_label_set_text(w.big_number, "--");
     } else {
-        std::snprintf(buf, sizeof(buf), "%d%%", block.w);
+        std::snprintf(buf, sizeof(buf), "%d%%", weekly_left);
         lv_label_set_text(w.big_number, buf);
     }
 
-    // Progress bar = weekly utilization
+    // Progress bar = weekly LEFT (fills toward 100 when fresh, drains as used)
     if (block.ok) {
         lv_obj_clear_flag(w.progress_bar, LV_OBJ_FLAG_HIDDEN);
-        int v = block.w;
-        if (v < 0) v = 0;
-        if (v > 100) v = 100;
-        lv_bar_set_value(w.progress_bar, v, LV_ANIM_ON);
+        lv_bar_set_value(w.progress_bar, weekly_left, LV_ANIM_ON);
     } else {
         lv_obj_add_flag(w.progress_bar, LV_OBJ_FLAG_HIDDEN);
         lv_bar_set_value(w.progress_bar, 0, LV_ANIM_OFF);
@@ -195,9 +202,9 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
         lv_label_set_text(w.reset_label, "");
     }
 
-    // Secondary tick = the 5h glance ("5h X%")
+    // Secondary tick = the 5h glance ("5h X% left")
     if (block.ok) {
-        std::snprintf(buf, sizeof(buf), "5h %d%%", block.s);
+        std::snprintf(buf, sizeof(buf), "5h %d%% left", hourly_left);
         lv_label_set_text(w.secondary_tick, buf);
     } else {
         lv_label_set_text(w.secondary_tick, "");

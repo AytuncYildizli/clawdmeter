@@ -117,14 +117,21 @@ class Orchestrator:
         self._refresh.set()
 
     async def _claude_loop(self) -> None:
-        token = load_claude_token()
-        if token:
-            log.info("claude token loaded (%d chars)", len(token))
-        else:
-            log.warning("no Claude token found — claude.ok stays False. Set "
-                        "~/.claude/.credentials.json or grant Python keychain "
-                        "access to 'Claude Code-credentials'.")
+        # Re-read the token on every iteration so account switches in Claude Code
+        # (which rewrite the Keychain entry) are picked up without a daemon restart.
+        last_token_hash: int | None = None
         while not self._stopped.is_set():
+            token = load_claude_token()
+            # Log only when the token actually changes — not every 60s.
+            token_hash = hash(token) if token else None
+            if token_hash != last_token_hash:
+                if token:
+                    log.info("claude token loaded (%d chars)", len(token))
+                else:
+                    log.warning("no Claude token found — claude.ok stays False. "
+                                "Set ~/.claude/.credentials.json or grant "
+                                "Python access to 'Claude Code-credentials'.")
+                last_token_hash = token_hash
             # Probe FIRST, then wait — so the first poll happens before any
             # external stop() can race the loop.
             if token:
