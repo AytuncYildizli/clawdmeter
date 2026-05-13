@@ -18,6 +18,17 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+class ServerCallbacks : public NimBLEServerCallbacks {
+    void onDisconnect(NimBLEServer* server,
+                      NimBLEConnInfo& /*info*/,
+                      int /*reason*/) override {
+        // NimBLE halts advertising when a peer connects and does NOT auto-resume
+        // on disconnect. Without this restart, the device becomes invisible to
+        // the daemon's scanner after the first BLE session ends.
+        NimBLEDevice::startAdvertising();
+    }
+};
+
 void begin(PayloadCallback cb) {
     g_callback = cb;
 
@@ -25,6 +36,8 @@ void begin(PayloadCallback cb) {
     NimBLEDevice::setMTU(517);  // request large MTU for payload writes
 
     g_server = NimBLEDevice::createServer();
+    static ServerCallbacks server_cb;
+    g_server->setCallbacks(&server_cb);
     NimBLEService* service = g_server->createService(SERVICE_UUID);
 
     auto rx = service->createCharacteristic(
