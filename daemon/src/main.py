@@ -34,20 +34,32 @@ def _load_keychain_credentials() -> dict | None:
     Claude Code on macOS stores its tokens in a generic-password keychain item
     named "Claude Code-credentials" instead of writing a credentials file. The
     payload is a JSON blob like {"claudeAiOauth": {"accessToken": "..."}}.
+
+    Multiple Keychain entries can exist under the same service name (e.g. an
+    older entry with acct="unknown" left over from a prior version, plus the
+    current one with acct=<username>). `security -w` without `-a` returns the
+    first match in keychain order, which is usually the stale one. We probe
+    the current username first, then fall back to a generic match.
     """
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0 or not result.stdout:
-        return None
-    try:
-        return json.loads(result.stdout.strip())
-    except Exception:
-        return None
+    import os
+    candidates = [os.environ.get("USER")] if os.environ.get("USER") else []
+    # Empty string at the end = no -a filter (fallback for non-username entries)
+    candidates.append(None)
+    for acct in candidates:
+        cmd = ["security", "find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"]
+        if acct:
+            cmd[2:2] = ["-a", acct]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0 or not result.stdout:
+            continue
+        try:
+            return json.loads(result.stdout.strip())
+        except Exception:
+            continue
+    return None
 
 
 def load_claude_token() -> str | None:
