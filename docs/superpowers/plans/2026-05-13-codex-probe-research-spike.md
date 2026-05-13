@@ -189,7 +189,7 @@ Write `research/codex-spike/tests/test_redact.py`:
 
 ```python
 import pytest
-from src.redact import redact_token, scrub_dict
+from src.redact import redact_token, scrub_dict, scrub_text, scrub_any
 
 
 def test_redact_short_token_returns_dots():
@@ -334,6 +334,40 @@ def test_scrub_dict_does_not_mutate_input():
     original_repr = repr(payload)
     scrub_dict(payload)
     assert repr(payload) == original_repr
+
+
+def test_scrub_text_redacts_bearer_in_freeform_text():
+    leak = "eyJleaked_jwt_value_here_long_enough_to_match"
+    text = f"Forbidden: token Bearer {leak} is invalid"
+    out = scrub_text(text)
+    assert leak not in out
+    # The "Bearer X" mask should fire
+    assert "Bearer <redacted>" in out
+
+
+def test_scrub_text_redacts_jwt_in_html_body():
+    leak = "eyJabcdefghijklmnopqrstuvwxyz0123456789.payload.signature"
+    html = f"<html><body>session={leak}</body></html>"
+    out = scrub_text(html)
+    assert leak not in out
+    assert "<jwt-redacted>" in out
+
+
+def test_scrub_any_handles_list_of_dicts_at_top_level():
+    leak = "eyJlist_top_level_token_value"
+    payload = [{"access_token": leak}, {"plan": "plus"}]
+    out = scrub_any(payload)
+    rendered = repr(out)
+    assert leak not in rendered
+    # non-secret preserved
+    assert out[1]["plan"] == "plus"
+
+
+def test_scrub_any_passes_through_non_collection_non_string():
+    assert scrub_any(42) == 42
+    assert scrub_any(None) is None
+    assert scrub_any(True) is True
+    assert scrub_any(3.14) == 3.14
 ```
 
 - [ ] **Step 2: Run the test, verify it fails**
@@ -356,8 +390,14 @@ Policy (case-insensitive on both keys and the Bearer scheme):
 - Values matching the Bearer scheme (any case) have only their credential redacted
 - Non-secret keys pass through unchanged
 - Input is never mutated; a new dict is returned
+
+`scrub_text` and `scrub_any` extend coverage to freeform text and
+arbitrary JSON-shaped values (dict | list | str | scalar) so that
+non-JSON response bodies and top-level JSON arrays/scalars also get
+scrubbed before being persisted to disk.
 """
 from __future__ import annotations
+import re
 from typing import Any
 
 # Use lowercased keys — membership tests lowercase the candidate key first.
@@ -414,6 +454,45 @@ def scrub_dict(data: dict) -> dict:
     for k, v in data.items():
         result[k] = _scrub_value(k, v)
     return result
+
+
+# Regex patterns for freeform-text scrubbing. Order matters: the full
+# three-part JWT pattern must run before the shorter JWT-prefix pattern.
+_TEXT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"Bearer\s+\S+", re.IGNORECASE), "Bearer <redacted>"),
+    (re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "<jwt-redacted>"),
+    (re.compile(r"eyJ[A-Za-z0-9_-]{20,}"), "<jwt-redacted>"),
+    (re.compile(r"sk-(?:proj-)?[A-Za-z0-9]{20,}"), "<openai-key-redacted>"),
+    (re.compile(r"(?im)^Set-Cookie:.*$"), "Set-Cookie: <redacted>"),
+]
+
+
+def scrub_text(text: str) -> str:
+    """Mask token-shaped substrings in freeform text. Used for non-JSON
+    response bodies (HTML error pages, plain-text 401/403 messages)."""
+    if not isinstance(text, str):
+        return text
+    out = text
+    for pat, repl in _TEXT_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def scrub_any(value: Any) -> Any:
+    """Top-level dispatch for any JSON-shaped value.
+
+    - dict  → scrub_dict (recursive)
+    - list  → recurse element by element
+    - str   → scrub_text (regex masks)
+    - other → returned unchanged
+    """
+    if isinstance(value, dict):
+        return scrub_dict(value)
+    if isinstance(value, list):
+        return [scrub_any(v) for v in value]
+    if isinstance(value, str):
+        return scrub_text(value)
+    return value
 ```
 
 - [ ] **Step 4: Run the test, verify it passes**
@@ -422,7 +501,7 @@ def scrub_dict(data: dict) -> dict:
 cd research/codex-spike && python3 -m pytest tests/test_redact.py -v
 ```
 
-Expected: all 13 tests pass.
+Expected: all 17 tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -794,6 +873,48 @@ def test_save_capture_writes_scrubbed_json(tmp_path):
     assert "eyJleaked_here" not in text
     assert written["status"] == 200
     assert written["body"]["plan"] == "plus"
+
+
+def test_save_capture_scrubs_raw_body(tmp_path):
+    """Regression: non-JSON response bodies (HTML/plain text) must not
+    leak token-shaped substrings to disk."""
+    from src.probe import save_capture
+    leak = "eyJleaked_jwt_value_here_long_enough"
+    result = ProbeResult(
+        slug="raw",
+        status=401,
+        headers={},
+        body=None,
+        raw_body=f"Forbidden: token Bearer {leak} is invalid",
+        error=None,
+    )
+    save_capture(result, tmp_path)
+    written = json.loads((tmp_path / "raw.json").read_text())
+    text = json.dumps(written)
+    # STRONG INVARIANT: the leaked secret string must not appear on disk
+    assert leak not in text
+    assert "Bearer <redacted>" in written["raw_body"]
+
+
+def test_save_capture_scrubs_list_body(tmp_path):
+    """Regression: JSON bodies that are top-level lists (or scalars)
+    must still be scrubbed — not skipped by a dict-only guard."""
+    from src.probe import save_capture
+    leak = "eyJlist_top_level_token_value_full"
+    result = ProbeResult(
+        slug="list_body",
+        status=200,
+        headers={},
+        body=[{"access_token": leak}, {"plan": "plus"}],
+        raw_body=None,
+        error=None,
+    )
+    save_capture(result, tmp_path)
+    written = json.loads((tmp_path / "list_body.json").read_text())
+    text = json.dumps(written)
+    assert leak not in text
+    # Non-secret content preserved
+    assert written["body"][1]["plan"] == "plus"
 ```
 
 - [ ] **Step 2: Run the test, verify it fails**
@@ -827,7 +948,7 @@ from pathlib import Path
 from typing import Any
 from .auth import load_auth
 from .candidates import CANDIDATES, Candidate
-from .redact import scrub_dict
+from .redact import scrub_any, scrub_text
 
 
 @dataclass
@@ -883,10 +1004,16 @@ def save_capture(result: ProbeResult, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{result.slug}.json"
     payload = asdict(result)
-    # Scrub before writing — headers and body may carry secrets
-    payload["headers"] = scrub_dict(payload["headers"])
-    if isinstance(payload["body"], dict):
-        payload["body"] = scrub_dict(payload["body"])
+    # Scrub before writing — every field that can carry secrets.
+    # - headers: dict, may contain Authorization etc.
+    # - body: arbitrary JSON shape (dict, list, scalar)
+    # - raw_body: freeform text (HTML, plain-text 401/403). Token-shaped
+    #   substrings get regex-masked. The 4000-char cap on raw_body is a
+    #   readability limit, NOT a security control — JWTs fit in <4000.
+    payload["headers"] = scrub_any(payload["headers"])
+    payload["body"] = scrub_any(payload["body"])
+    if payload["raw_body"] is not None:
+        payload["raw_body"] = scrub_text(payload["raw_body"])
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     return out_path
 
@@ -931,7 +1058,7 @@ if __name__ == "__main__":
 cd research/codex-spike && python3 -m pytest tests/test_probe.py -v
 ```
 
-Expected: all 4 tests pass.
+Expected: all 6 tests pass.
 
 - [ ] **Step 5: Commit**
 
