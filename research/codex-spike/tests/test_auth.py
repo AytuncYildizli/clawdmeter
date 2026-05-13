@@ -74,3 +74,44 @@ def test_load_empty_tokens_dict_yields_none_fields(tmp_path):
     assert auth.access_token is None
     assert auth.refresh_token is None
     assert auth.id_token is None
+
+
+def test_load_lowercase_chatgpt_mode_accepted(tmp_path):
+    """Real ~/.codex/auth.json files use lowercase 'chatgpt'. The loader must accept it."""
+    f = tmp_path / "lowercase.json"
+    f.write_text(json.dumps({
+        "auth_mode": "chatgpt",
+        "tokens": {"access_token": "eyJtok_value_long_enough"},
+        "last_refresh": None,
+    }))
+    auth = load_auth(f)
+    assert auth.mode == "chatgpt"  # raw value preserved
+    assert auth.access_token == "eyJtok_value_long_enough"
+
+
+def test_load_mixed_case_chatgpt_with_whitespace(tmp_path):
+    """Defensive: leading/trailing whitespace is stripped before comparison."""
+    f = tmp_path / "padded.json"
+    f.write_text(json.dumps({
+        "auth_mode": "  ChatGPT  ",
+        "tokens": {},
+        "last_refresh": None,
+    }))
+    auth = load_auth(f)
+    assert auth.mode == "  ChatGPT  "  # raw preserved
+
+
+def test_load_non_chatgpt_mode_still_rejected(tmp_path):
+    """Other modes (ApiKey, etc.) must still be rejected."""
+    f = tmp_path / "apikey.json"
+    f.write_text(json.dumps({"auth_mode": "ApiKey", "tokens": {}}))
+    with pytest.raises(AuthError, match="auth_mode='ApiKey'"):
+        load_auth(f)
+
+
+def test_load_non_string_mode_rejected(tmp_path):
+    """auth_mode=null or non-string is rejected with a clear error."""
+    f = tmp_path / "null.json"
+    f.write_text(json.dumps({"auth_mode": None, "tokens": {}}))
+    with pytest.raises(AuthError, match="auth_mode=None"):
+        load_auth(f)

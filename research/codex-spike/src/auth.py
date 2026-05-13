@@ -47,9 +47,10 @@ def load_auth(path: Path) -> CodexAuth:
         raise AuthError("failed to parse auth file") from e
 
     mode = data.get("auth_mode")
-    # Strict compare: Codex writes "ChatGPT" literally. If the format ever drifts
-    # (whitespace, casing), fail loud rather than paper over upstream changes.
-    if mode != "ChatGPT":
+    # Case-insensitive compare: real Codex CLI auth.json files write
+    # auth_mode=chatgpt (lowercase). Match any case to support older/newer
+    # CLI versions; the loader normalizes to lowercase internally.
+    if not isinstance(mode, str) or mode.strip().lower() != "chatgpt":
         raise AuthError(f"unsupported auth_mode={mode!r}; this spike only handles ChatGPT")
 
     tokens = data.get("tokens") or {}
