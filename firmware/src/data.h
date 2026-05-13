@@ -29,6 +29,11 @@ struct PayloadState {
     ProviderBlock codex;
     FocusBlock focus;
     bool initialized = false;  // becomes true after the first successful parse
+    // millis() timestamp of the most recent BLE payload write. 0 = never.
+    // Used by the UI freshness footer (Plan #4 Task 14) to render
+    // Synced/Stale/Offline. Not parsed from the payload — set by the BLE
+    // onWrite callback when the message arrives.
+    uint32_t last_payload_millis = 0;
 };
 
 }  // namespace data

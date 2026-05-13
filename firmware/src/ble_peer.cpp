@@ -1,5 +1,6 @@
 #include "ble_peer.h"
 #include "payload_parser.h"
+#include <Arduino.h>
 #include <NimBLEDevice.h>
 
 namespace ble_peer {
@@ -13,6 +14,11 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
         const auto& value = chr->getValue();
         data::PayloadState parsed{};
         if (parser::parse_payload(value.c_str(), value.length(), parsed)) {
+            // Stamp arrival time on the parsed state so the UI freshness footer
+            // (Plan #4 Task 14) can compute age = millis() - last_payload_millis.
+            // Set here (not in the consumer lambda) so any future callback path
+            // automatically inherits the timestamp.
+            parsed.last_payload_millis = millis();
             if (g_callback) g_callback(parsed);
         }
     }

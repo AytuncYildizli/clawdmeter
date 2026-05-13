@@ -2,6 +2,7 @@
 #include "theme.h"
 #include "layout_math.h"
 #include <M5Unified.h>
+#include <Arduino.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +20,8 @@ struct ScreenWidgets {
     lv_obj_t* reset_label;
     lv_obj_t* secondary_tick;
     lv_obj_t* repo_label;
+    lv_obj_t* status_dot;
+    lv_obj_t* status_label;
     lv_obj_t* dot_left;
     lv_obj_t* dot_right;
     lv_obj_t* battery_icon;
@@ -87,7 +90,25 @@ ScreenWidgets build_screen(lv_obj_t* parent, lv_color_t accent) {
     w.repo_label = lv_label_create(w.card);
     lv_obj_set_style_text_color(w.repo_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(w.repo_label, &lv_font_montserrat_16, 0);
-    lv_obj_align(w.repo_label, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(w.repo_label, LV_ALIGN_BOTTOM_MID, 0, -22);
+
+    // Freshness footer (Plan #4 Task 14): 6×6 colored dot + label inside the
+    // card, directly under repo_label. Communicates BLE payload age:
+    // Waiting…/Synced/Stale/Offline. Filled by refresh_one() from
+    // state.last_payload_millis.
+    w.status_dot = lv_obj_create(w.card);
+    lv_obj_set_size(w.status_dot, 6, 6);
+    lv_obj_set_style_radius(w.status_dot, 3, 0);
+    lv_obj_set_style_border_width(w.status_dot, 0, 0);
+    lv_obj_set_style_bg_color(w.status_dot, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_obj_set_style_bg_opa(w.status_dot, LV_OPA_COVER, 0);
+    lv_obj_align(w.status_dot, LV_ALIGN_BOTTOM_LEFT, 60, -4);
+
+    w.status_label = lv_label_create(w.card);
+    lv_obj_set_style_text_color(w.status_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(w.status_label, &lv_font_montserrat_14, 0);
+    lv_label_set_text(w.status_label, "Waiting...");
+    lv_obj_align(w.status_label, LV_ALIGN_BOTTOM_LEFT, 72, -2);
 
     // Two indicator dots — small bars (outside the card, on the root).
     w.dot_left = lv_obj_create(w.root);
@@ -155,9 +176,39 @@ void refresh_battery(ScreenWidgets& w) {
     lv_obj_set_style_bg_color(w.battery_fill, lv_color_hex(color), 0);
 }
 
+void refresh_status_footer(ScreenWidgets& w, uint32_t last_payload_millis) {
+    // Compute age = millis() - last_payload_millis; pick label + dot color.
+    // Buckets per Plan #4 Task 14:
+    //   never:     "Waiting..." (gray)
+    //   < 5 min:   "Synced"     (green 0x44AA44)
+    //   < 60 min:  "Stale"      (yellow 0xFFCC00)
+    //   >= 60 min: "Offline"    (red 0xFF4444)
+    const char* label;
+    uint32_t color;
+    if (last_payload_millis == 0) {
+        label = "Waiting...";
+        color = theme::TEXT_SECONDARY;
+    } else {
+        uint32_t age_ms = millis() - last_payload_millis;
+        if (age_ms < 300000U) {
+            label = "Synced";
+            color = 0x44AA44;
+        } else if (age_ms < 3600000U) {
+            label = "Stale";
+            color = 0xFFCC00;
+        } else {
+            label = "Offline";
+            color = 0xFF4444;
+        }
+    }
+    lv_obj_set_style_bg_color(w.status_dot, lv_color_hex(color), 0);
+    lv_label_set_text(w.status_label, label);
+}
+
 void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
                  const data::FocusBlock& focus, const char* provider_name,
-                 lv_color_t accent, bool is_active_pager, bool /*show_7d*/) {
+                 lv_color_t accent, bool is_active_pager, bool /*show_7d*/,
+                 uint32_t last_payload_millis) {
     char buf[64];
 
     // Provider tag: always "CLAUDE | weekly". 5h sits at the bottom as a small
@@ -231,6 +282,9 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
 
     // Battery — read once per refresh and update both visuals.
     refresh_battery(w);
+
+    // Freshness footer (Synced/Stale/Offline/Waiting based on BLE payload age).
+    refresh_status_footer(w, last_payload_millis);
 }
 
 }  // namespace
@@ -247,11 +301,11 @@ void refresh(MeterScreens& /*screens*/, const data::PayloadState& state, bool sh
     refresh_one(g_claude, state.claude, state.focus, "CLAUDE",
                 lv_color_hex(theme::CLAUDE_ACCENT),
                 /*is_active_pager*/ true,  // pager will adjust per swipe
-                show_7d);
+                show_7d, state.last_payload_millis);
     refresh_one(g_codex, state.codex, state.focus, "CODEX",
                 lv_color_hex(theme::CODEX_ACCENT),
                 /*is_active_pager*/ false,
-                show_7d);
+                show_7d, state.last_payload_millis);
 }
 
 }  // namespace ui_meter
