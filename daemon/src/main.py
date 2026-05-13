@@ -105,6 +105,11 @@ class Orchestrator:
         self._refresh = asyncio.Event()
         self._stopped = asyncio.Event()
 
+    def _on_connected(self) -> None:
+        # Flush current state to the freshly-connected device. Writes attempted
+        # before the BLE link came up were silently skipped; this catches them.
+        self._dirty.set()
+
     def _on_refresh(self) -> None:
         # Called from BleWriter notify thread (asyncio loop's call_soon_threadsafe is the
         # canonical way; for bleak's macOS backend the callback runs on the loop already.)
@@ -173,6 +178,7 @@ class Orchestrator:
 
     async def run(self) -> None:
         self.writer.on_refresh = self._on_refresh
+        self.writer.on_connected = self._on_connected
         await asyncio.gather(
             self._claude_loop(),
             self._superset_loop(),

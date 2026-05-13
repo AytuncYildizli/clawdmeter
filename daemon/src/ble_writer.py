@@ -26,6 +26,7 @@ class BleWriter:
         self._client: BleakClient | None = None
         self._stopped = asyncio.Event()
         self.on_refresh: Callable[[], None] | None = None
+        self.on_connected: Callable[[], None] | None = None
 
     async def write_payload(self, payload: dict) -> None:
         """Write the JSON-encoded payload to the RX characteristic.
@@ -79,6 +80,11 @@ class BleWriter:
         await client.start_notify(REQ_CHAR_UUID, self._handle_req_notify)
         self._client = client
         log.info("connected")
+        # Notify the orchestrator so it can flush the current state to the
+        # freshly-connected peer (writes attempted before connect were silently
+        # skipped).
+        if self.on_connected is not None:
+            self.on_connected()
         return True
 
     async def run(self) -> None:
