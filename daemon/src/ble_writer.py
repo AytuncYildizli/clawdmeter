@@ -38,7 +38,10 @@ class BleWriter:
             return
         data = json.dumps(payload).encode("utf-8")
         try:
-            await client.write_gatt_char(RX_CHAR_UUID, data, response=False)
+            # response=True enables BLE prepared/long writes for >MTU payloads.
+            # Our payload is ~227 bytes; default ATT MTU is 23 (20 data bytes).
+            # Without long-write, write-no-response silently truncates.
+            await client.write_gatt_char(RX_CHAR_UUID, data, response=True)
             log.info("wrote %d bytes: claude.ok=%s claude.s=%s focus.agent=%s",
                      len(data),
                      payload.get("claude", {}).get("ok"),
