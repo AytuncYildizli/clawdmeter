@@ -9,5 +9,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra -q"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+package-dir = {"clawdmeter" = "src"}
+packages = ["clawdmeter"]

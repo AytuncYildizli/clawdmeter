@@ -1,0 +1,10 @@
+{
+  "auth_mode": "ChatGPT",
+  "OPENAI_API_KEY": "sk-proj-fake",
+  "tokens": {
+    "access_token": "eyJaccess_fake_payload_fake_signature",
+    "refresh_token": "eyJrefresh_fake_payload_fake_signature",
+    "id_token": "eyJid_fake_payload_fake_signature"
+  },
+  "last_refresh": "2026-05-13T08:00:00Z"
+}
