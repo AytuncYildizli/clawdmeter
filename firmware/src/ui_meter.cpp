@@ -81,7 +81,7 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
 
     // Big number
     if (!block.ok) {
-        lv_label_set_text(w.big_number, "—");
+        lv_label_set_text(w.big_number, "--");
     } else {
         int v = show_7d ? block.w : block.s;
         std::snprintf(buf, sizeof(buf), "%d%%", v);
@@ -113,7 +113,7 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
     } else if (focus.repo[0] != '\0') {
         std::snprintf(buf, sizeof(buf), "%s", focus.repo);
     } else {
-        std::strcpy(buf, "—");
+        std::strcpy(buf, "--");
     }
     lv_label_set_text(w.repo_label, buf);
 

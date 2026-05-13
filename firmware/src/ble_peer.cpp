@@ -42,8 +42,12 @@ void begin(PayloadCallback cb) {
     service->start();
 
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-    adv->addServiceUUID(SERVICE_UUID);
     adv->setName(DEVICE_NAME);
+    // Service UUID intentionally omitted from the main adv packet — the
+    // 128-bit UUID (18 bytes) + flags (3) + name (18) = 39 bytes, exceeding
+    // the 31-byte BLE advertising limit. The daemon's scanner filters by name
+    // only; the service is discovered after connection. To re-introduce the
+    // UUID, move it to scan response data via setScanResponseData().
     adv->start();
 }
 

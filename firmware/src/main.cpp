@@ -80,6 +80,11 @@ void setup() {
 
     g_meter = ui_meter::build(lv_scr_act());
     ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen);
+    // Register gesture handler on each meter screen — events don't bubble from
+    // child widgets to lv_scr_act() automatically; the screen widgets themselves
+    // own the touch area, so we attach there.
+    lv_obj_add_event_cb(g_meter.claude_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
+    lv_obj_add_event_cb(g_meter.codex_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     splash::init(lv_scr_act());
     rotate::reset(g_rotate, millis());
@@ -95,7 +100,11 @@ void setup() {
     ble_peer::begin([](const data::PayloadState& parsed) {
         g_state = parsed;
     });
-    ble_hid::begin();  // reuses NimBLE server already created by ble_peer
+    // HID disabled temporarily — adding HID after GATT overflows the 31-byte
+    // advertising packet on NimBLE, which silently drops the device name and
+    // makes the daemon's scan filter fail to match. Plan #4 adds it back with
+    // scan-response splitting.
+    // ble_hid::begin();
     ble_peer::request_refresh();  // ask daemon for current state on boot
 }
 
