@@ -126,6 +126,20 @@ void loop() {
     bool show_7d = (rotate::current(g_rotate, millis()) == rotate::Frame::SevenDay);
     ui_meter::refresh(g_meter, g_state, show_7d);
 
+    // Pager auto-rotation: swap Claude<->Codex every 10s. Manual swipes still
+    // work and reset the timer to "now" so the user's intent isn't fought.
+    static uint32_t last_page_swap = 0;
+    constexpr uint32_t PAGE_SWAP_INTERVAL = 10000;  // ms
+    uint32_t now = millis();
+    if (now - last_page_swap > PAGE_SWAP_INTERVAL) {
+        if (ui_pager::current(g_pager) == ui_pager::Page::Claude) {
+            ui_pager::on_swipe_left(g_pager);
+        } else {
+            ui_pager::on_swipe_right(g_pager);
+        }
+        last_page_swap = now;
+    }
+
     delay(50);
 }
 

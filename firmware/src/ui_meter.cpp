@@ -160,9 +160,9 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
                  lv_color_t accent, bool is_active_pager, bool show_7d) {
     char buf[64];
 
-    // Provider tag: "CLAUDE | 5H" or "CODEX | 7D" (ASCII pipe; Montserrat
+    // Provider tag: "CLAUDE | weekly" or "CLAUDE | 5h" (ASCII pipe; Montserrat
     // subset lacks U+00B7 middle dot and renders it as a missing-glyph box).
-    std::snprintf(buf, sizeof(buf), "%s | %s", provider_name, show_7d ? "7D" : "5H");
+    std::snprintf(buf, sizeof(buf), "%s | %s", provider_name, show_7d ? "weekly" : "5h");
     lv_label_set_text(w.provider_tag, buf);
 
     // Big number
