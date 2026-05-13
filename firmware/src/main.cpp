@@ -12,22 +12,21 @@
 #include "buttons.h"
 #include "splash.h"
 
-// LVGL display buffer — partial mode, 10 scanlines wide.
+// LVGL display buffer — partial mode, 10 scanlines × 2 bytes/pixel (RGB565).
+// Important: lv_color_t in LVGL 9 is a 3-byte {r,g,b} struct (sizeof=3), NOT a
+// uint16_t. Using lv_color_t here would mis-stride the framebuffer — LVGL writes
+// 2-byte pixels but our reads would skip by 3. Allocate as raw bytes instead.
 static lv_display_t* g_disp;
-static lv_color_t g_buf1[320 * 10];
+static uint8_t g_buf1[320 * 10 * 2];
 
 static void disp_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
     int32_t w = (area->x2 - area->x1 + 1);
     int32_t h = (area->y2 - area->y1 + 1);
-    // M5GFX's pushImageDMA<T> requires T to implement a get() method, which
-    // LVGL 9's lv_color_t (a plain 16-bit struct) does not. Use the address-
-    // window + writePixelsDMA(uint16_t*, len, swap=false) overload instead.
-    // LV_COLOR_DEPTH=16 with default endianness already matches the panel's
-    // RGB565 expectation, so no byte swap is required.
-    M5.Display.startWrite();
-    M5.Display.setAddrWindow(area->x1, area->y1, w, h);
-    M5.Display.writePixelsDMA(reinterpret_cast<uint16_t*>(px_map), w * h, false);
-    M5.Display.endWrite();
+    // Use M5GFX's high-level pushImage which handles addrWindow + byte-order
+    // correctly for the ILI9342C panel. The cast to uint16_t* is safe because
+    // LV_COLOR_DEPTH=16 packs lv_color_t as a 16-bit RGB565 value.
+    M5.Display.pushImage(area->x1, area->y1, w, h,
+                        reinterpret_cast<lgfx::rgb565_t*>(px_map));
     lv_display_flush_ready(disp);
 }
 
@@ -59,6 +58,15 @@ static void screen_gesture_cb(lv_event_t* /*e*/) {
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
+    M5.Display.setRotation(1);  // 320×240 landscape; Core 2's ILI9342C is native portrait
+
+    // Boot indicator — orange flash for 800ms so flashes are visually distinguishable
+    M5.Display.fillScreen(M5.Display.color565(0xFF, 0x8C, 0x42));
+    M5.Display.setCursor(10, 10);
+    M5.Display.setTextColor(0xFFFF, M5.Display.color565(0xFF, 0x8C, 0x42));
+    M5.Display.setTextSize(2);
+    M5.Display.print("CLAWDMETER BOOT");
+    delay(800);
 
     lv_init();
     g_disp = lv_display_create(320, 240);

@@ -32,25 +32,27 @@ ScreenWidgets build_screen(lv_obj_t* parent, lv_color_t accent) {
 
     w.provider_tag = lv_label_create(w.root);
     lv_obj_set_style_text_color(w.provider_tag, accent, 0);
+    lv_obj_set_style_text_font(w.provider_tag, &lv_font_montserrat_20, 0);
     lv_obj_align(w.provider_tag, LV_ALIGN_TOP_MID, 0, layout::TOP_MARGIN);
 
     w.big_number = lv_label_create(w.root);
     lv_obj_set_style_text_color(w.big_number, lv_color_hex(theme::TEXT_PRIMARY), 0);
-    // Larger font for the big number — LVGL 9 uses montserrat by default.
-    // Replace with a custom font in a follow-up (or use Montserrat-48 if available)
     lv_obj_set_style_text_font(w.big_number, &lv_font_montserrat_48, 0);
     lv_obj_align(w.big_number, LV_ALIGN_CENTER, 0, 0);
 
     w.reset_label = lv_label_create(w.root);
     lv_obj_set_style_text_color(w.reset_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(w.reset_label, &lv_font_montserrat_16, 0);
     lv_obj_align(w.reset_label, LV_ALIGN_CENTER, 0, 50);
 
     w.secondary_tick = lv_label_create(w.root);
     lv_obj_set_style_text_color(w.secondary_tick, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_font(w.secondary_tick, &lv_font_montserrat_16, 0);
     lv_obj_align(w.secondary_tick, LV_ALIGN_CENTER, 0, 70);
 
     w.repo_label = lv_label_create(w.root);
     lv_obj_set_style_text_color(w.repo_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(w.repo_label, &lv_font_montserrat_16, 0);
     lv_obj_align(w.repo_label, LV_ALIGN_BOTTOM_MID, 0, -20);
 
     // Two indicator dots — small bars
@@ -72,8 +74,9 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
                  lv_color_t accent, bool is_active_pager, bool show_7d) {
     char buf[64];
 
-    // Provider tag: "CLAUDE · 5H" or "CODEX · 7D"
-    std::snprintf(buf, sizeof(buf), "%s · %s", provider_name, show_7d ? "7D" : "5H");
+    // Provider tag: "CLAUDE | 5H" or "CODEX | 7D" (ASCII pipe; Montserrat
+    // subset lacks U+00B7 middle dot and renders it as a missing-glyph box).
+    std::snprintf(buf, sizeof(buf), "%s | %s", provider_name, show_7d ? "7D" : "5H");
     lv_label_set_text(w.provider_tag, buf);
 
     // Big number
@@ -106,7 +109,7 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
 
     // Repo label
     if (focus.sessions > 0) {
-        std::snprintf(buf, sizeof(buf), "%s · +%d", focus.repo, focus.sessions);
+        std::snprintf(buf, sizeof(buf), "%s +%d", focus.repo, focus.sessions);
     } else if (focus.repo[0] != '\0') {
         std::snprintf(buf, sizeof(buf), "%s", focus.repo);
     } else {
