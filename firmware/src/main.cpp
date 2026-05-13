@@ -46,6 +46,49 @@ static ui_pager::Pager g_pager;
 static rotate::State g_rotate;
 static data::PayloadState g_state{};
 
+// Hand-rolled swipe detector. LVGL 9's gesture engine needs many polled
+// samples per second to detect motion; with our 50ms loop the sampling is
+// too sparse. Track touch start/end ourselves and fire on_swipe_left/right
+// when horizontal travel exceeds a threshold.
+namespace {
+
+constexpr int16_t SWIPE_THRESHOLD_PX = 40;
+constexpr int16_t SWIPE_VERTICAL_LIMIT_PX = 60;  // reject mostly-vertical drags
+int16_t g_touch_start_x = -1;
+int16_t g_touch_start_y = -1;
+int16_t g_touch_last_x = -1;
+int16_t g_touch_last_y = -1;
+bool g_touch_active = false;
+
+void poll_swipe() {
+    auto t = M5.Touch.getDetail();
+    if (t.isPressed()) {
+        if (!g_touch_active) {
+            g_touch_active = true;
+            g_touch_start_x = t.x;
+            g_touch_start_y = t.y;
+        }
+        g_touch_last_x = t.x;
+        g_touch_last_y = t.y;
+    } else if (g_touch_active) {
+        g_touch_active = false;
+        if (g_touch_start_x < 0 || g_touch_last_x < 0) return;
+        int16_t dx = g_touch_last_x - g_touch_start_x;
+        int16_t dy = g_touch_last_y - g_touch_start_y;
+        int16_t adx = dx < 0 ? -dx : dx;
+        int16_t ady = dy < 0 ? -dy : dy;
+        if (adx >= SWIPE_THRESHOLD_PX && ady <= SWIPE_VERTICAL_LIMIT_PX) {
+            if (dx < 0) {
+                ui_pager::on_swipe_left(g_pager);
+            } else {
+                ui_pager::on_swipe_right(g_pager);
+            }
+        }
+    }
+}
+
+}  // namespace
+
 static void screen_gesture_cb(lv_event_t* /*e*/) {
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
     if (dir == LV_DIR_LEFT) {
@@ -110,6 +153,7 @@ void setup() {
 
 void loop() {
     M5.update();
+    poll_swipe();  // own swipe detector — LVGL gestures unreliable at 50ms cadence
     buttons::tick(g_state.focus.agent);
     if (buttons::consume_splash_toggle()) {
         if (splash::is_visible()) {
