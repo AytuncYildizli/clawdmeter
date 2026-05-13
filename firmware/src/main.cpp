@@ -17,13 +17,7 @@ void loop() {
     delay(50);
 }
 
-#else  // UNIT_TEST — host-side native build
-
-// Host build needs a main() entry point. The test_framework=unity machinery
-// provides one when running `pio test -e native`; for `pio run -e native` we
-// supply a no-op main so the build artifact (.pio/build/native/program) links.
-int main(int /*argc*/, char** /*argv*/) {
-    return 0;
-}
-
-#endif
+#endif  // !UNIT_TEST
+// Host build: no main() here. Each `firmware/test/*/*.cpp` provides its own
+// main() that drives Unity. `test_build_src = yes` pulls src/*.cpp into the
+// test binary so parsers, layout math, etc. link in.
