@@ -506,9 +506,39 @@ def test_load_api_key_mode_marked_unsupported(tmp_path):
 def test_redacted_repr_is_safe():
     auth = load_auth(FIXTURES / "auth-sample.json")
     text = repr(auth)
+    # All three token fields must be redacted in repr
     assert "eyJaccess_fake_payload_fake_signature" not in text
+    assert "eyJrefresh_fake_payload_fake_signature" not in text
+    assert "eyJid_fake_payload_fake_signature" not in text
     assert "…" in text
     assert "ChatGPT" in text  # non-secret is preserved
+
+
+def test_load_missing_tokens_dict_treats_tokens_as_none():
+    """Edge case: auth.json with no `tokens` key should yield CodexAuth
+    with all-None token fields, not raise."""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"auth_mode": "ChatGPT", "last_refresh": None}, f)
+        path = Path(f.name)
+    try:
+        auth = load_auth(path)
+        assert auth.mode == "ChatGPT"
+        assert auth.access_token is None
+        assert auth.refresh_token is None
+        assert auth.id_token is None
+    finally:
+        path.unlink()
+
+
+def test_load_empty_tokens_dict_yields_none_fields(tmp_path):
+    """Edge case: tokens={} should produce all-None token fields."""
+    f = tmp_path / "empty_tokens.json"
+    f.write_text(json.dumps({"auth_mode": "ChatGPT", "tokens": {}, "last_refresh": None}))
+    auth = load_auth(f)
+    assert auth.access_token is None
+    assert auth.refresh_token is None
+    assert auth.id_token is None
 ```
 
 - [ ] **Step 3: Run the test, verify it fails**
@@ -525,7 +555,12 @@ Write `research/codex-spike/src/auth.py`:
 
 ```python
 """Loader for ~/.codex/auth.json. Refuses to operate on non-ChatGPT modes
-(the daemon's spec only covers ChatGPT-mode probing)."""
+(the daemon's spec only covers ChatGPT-mode probing).
+
+WARNING: ``dataclasses.asdict()`` and ``CodexAuth.__dict__`` bypass the
+redacting ``__repr__`` and expose raw tokens. Never log via those — use
+``repr()`` or address fields explicitly.
+"""
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -561,9 +596,15 @@ def load_auth(path: Path) -> CodexAuth:
     try:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as e:
-        raise AuthError(f"failed to parse auth file: {e}") from e
+        # Generic message — JSONDecodeError.str can surface bytes around the
+        # parse failure, which for ~/.codex/auth.json may include token chars.
+        # `from e` keeps the original exception in the traceback chain for
+        # debug-mode tracebacks without exposing it in the public message.
+        raise AuthError("failed to parse auth file") from e
 
     mode = data.get("auth_mode")
+    # Strict compare: Codex writes "ChatGPT" literally. If the format ever drifts
+    # (whitespace, casing), fail loud rather than paper over upstream changes.
     if mode != "ChatGPT":
         raise AuthError(f"unsupported auth_mode={mode!r}; this spike only handles ChatGPT")
 
@@ -583,7 +624,7 @@ def load_auth(path: Path) -> CodexAuth:
 cd research/codex-spike && python3 -m pytest tests/test_auth.py -v
 ```
 
-Expected: all 5 tests pass.
+Expected: all 7 tests pass.
 
 - [ ] **Step 6: Commit**
 
