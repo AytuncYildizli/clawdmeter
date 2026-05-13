@@ -244,10 +244,17 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
         lv_bar_set_value(w.progress_bar, 0, LV_ANIM_OFF);
     }
 
-    // Reset countdown = weekly reset
+    // Reset countdown = weekly reset. Weekly resets are days away — format as
+    // "Xd Yh" when over 24h, "Xh Ym" otherwise.
     if (block.ok) {
         int mins = block.wr;
-        std::snprintf(buf, sizeof(buf), "resets in %dh %dm", mins / 60, mins % 60);
+        if (mins >= 24 * 60) {
+            int days = mins / (24 * 60);
+            int hours = (mins % (24 * 60)) / 60;
+            std::snprintf(buf, sizeof(buf), "resets in %dd %dh", days, hours);
+        } else {
+            std::snprintf(buf, sizeof(buf), "resets in %dh %dm", mins / 60, mins % 60);
+        }
         lv_label_set_text(w.reset_label, buf);
     } else {
         lv_label_set_text(w.reset_label, "");
