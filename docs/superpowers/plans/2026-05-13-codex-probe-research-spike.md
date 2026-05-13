@@ -20,7 +20,7 @@
 ## Working assumptions (verify in Task 1)
 
 - `~/.codex/auth.json` exists with keys `auth_mode`, `OPENAI_API_KEY`, `tokens`, `last_refresh`
-- `auth_mode == "ChatGPT"` for the user running this spike
+- `auth_mode.lower() == "chatgpt"` for the user running this spike (real Codex CLI writes lowercase `chatgpt`; loader is case-insensitive)
 - `tokens` contains an access token and/or refresh token usable as a Bearer credential against `chatgpt.com/backend-api/*`
 
 If any assumption fails, Task 1 records the failure and halts the spike with a "cannot probe" report.
@@ -682,9 +682,10 @@ def load_auth(path: Path) -> CodexAuth:
         raise AuthError("failed to parse auth file") from e
 
     mode = data.get("auth_mode")
-    # Strict compare: Codex writes "ChatGPT" literally. If the format ever drifts
-    # (whitespace, casing), fail loud rather than paper over upstream changes.
-    if mode != "ChatGPT":
+    # Case-insensitive compare: real Codex CLI auth.json files write
+    # auth_mode=chatgpt (lowercase). Match any case to support older/newer
+    # CLI versions; the loader normalizes to lowercase internally.
+    if not isinstance(mode, str) or mode.strip().lower() != "chatgpt":
         raise AuthError(f"unsupported auth_mode={mode!r}; this spike only handles ChatGPT")
 
     tokens = data.get("tokens") or {}
@@ -703,7 +704,7 @@ def load_auth(path: Path) -> CodexAuth:
 cd research/codex-spike && python3 -m pytest tests/test_auth.py -v
 ```
 
-Expected: all 7 tests pass.
+Expected: all 11 tests pass.
 
 - [ ] **Step 6: Commit**
 
