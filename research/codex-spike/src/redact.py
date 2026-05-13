@@ -5,8 +5,14 @@ Policy (case-insensitive on both keys and the Bearer scheme):
 - Values matching the Bearer scheme (any case) have only their credential redacted
 - Non-secret keys pass through unchanged
 - Input is never mutated; a new dict is returned
+
+`scrub_text` and `scrub_any` extend coverage to freeform text and
+arbitrary JSON-shaped values (dict | list | str | scalar) so that
+non-JSON response bodies and top-level JSON arrays/scalars also get
+scrubbed before being persisted to disk.
 """
 from __future__ import annotations
+import re
 from typing import Any
 
 # Use lowercased keys — membership tests lowercase the candidate key first.
@@ -63,3 +69,42 @@ def scrub_dict(data: dict) -> dict:
     for k, v in data.items():
         result[k] = _scrub_value(k, v)
     return result
+
+
+# Regex patterns for freeform-text scrubbing. Order matters: the full
+# three-part JWT pattern must run before the shorter JWT-prefix pattern.
+_TEXT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"Bearer\s+\S+", re.IGNORECASE), "Bearer <redacted>"),
+    (re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "<jwt-redacted>"),
+    (re.compile(r"eyJ[A-Za-z0-9_-]{20,}"), "<jwt-redacted>"),
+    (re.compile(r"sk-(?:proj-)?[A-Za-z0-9]{20,}"), "<openai-key-redacted>"),
+    (re.compile(r"(?im)^Set-Cookie:.*$"), "Set-Cookie: <redacted>"),
+]
+
+
+def scrub_text(text: str) -> str:
+    """Mask token-shaped substrings in freeform text. Used for non-JSON
+    response bodies (HTML error pages, plain-text 401/403 messages)."""
+    if not isinstance(text, str):
+        return text
+    out = text
+    for pat, repl in _TEXT_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def scrub_any(value: Any) -> Any:
+    """Top-level dispatch for any JSON-shaped value.
+
+    - dict  -> scrub_dict (recursive)
+    - list  -> recurse element by element
+    - str   -> scrub_text (regex masks)
+    - other -> returned unchanged
+    """
+    if isinstance(value, dict):
+        return scrub_dict(value)
+    if isinstance(value, list):
+        return [scrub_any(v) for v in value]
+    if isinstance(value, str):
+        return scrub_text(value)
+    return value

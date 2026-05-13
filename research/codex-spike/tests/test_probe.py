@@ -68,3 +68,45 @@ def test_save_capture_writes_scrubbed_json(tmp_path):
     assert "eyJleaked_here" not in text
     assert written["status"] == 200
     assert written["body"]["plan"] == "plus"
+
+
+def test_save_capture_scrubs_raw_body(tmp_path):
+    """Regression: non-JSON response bodies (HTML/plain text) must not
+    leak token-shaped substrings to disk."""
+    from src.probe import save_capture
+    leak = "eyJleaked_jwt_value_here_long_enough"
+    result = ProbeResult(
+        slug="raw",
+        status=401,
+        headers={},
+        body=None,
+        raw_body=f"Forbidden: token Bearer {leak} is invalid",
+        error=None,
+    )
+    save_capture(result, tmp_path)
+    written = json.loads((tmp_path / "raw.json").read_text())
+    text = json.dumps(written)
+    # STRONG INVARIANT: the leaked secret string must not appear on disk
+    assert leak not in text
+    assert "Bearer <redacted>" in written["raw_body"]
+
+
+def test_save_capture_scrubs_list_body(tmp_path):
+    """Regression: JSON bodies that are top-level lists (or scalars)
+    must still be scrubbed — not skipped by a dict-only guard."""
+    from src.probe import save_capture
+    leak = "eyJlist_top_level_token_value_full"
+    result = ProbeResult(
+        slug="list_body",
+        status=200,
+        headers={},
+        body=[{"access_token": leak}, {"plan": "plus"}],
+        raw_body=None,
+        error=None,
+    )
+    save_capture(result, tmp_path)
+    written = json.loads((tmp_path / "list_body.json").read_text())
+    text = json.dumps(written)
+    assert leak not in text
+    # Non-secret content preserved
+    assert written["body"][1]["plan"] == "plus"

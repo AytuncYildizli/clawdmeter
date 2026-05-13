@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from .auth import load_auth
 from .candidates import CANDIDATES, Candidate
-from .redact import scrub_dict
+from .redact import scrub_any, scrub_text
 
 
 @dataclass
@@ -72,10 +72,16 @@ def save_capture(result: ProbeResult, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{result.slug}.json"
     payload = asdict(result)
-    # Scrub before writing — headers and body may carry secrets
-    payload["headers"] = scrub_dict(payload["headers"])
-    if isinstance(payload["body"], dict):
-        payload["body"] = scrub_dict(payload["body"])
+    # Scrub before writing — every field that can carry secrets.
+    # - headers: dict, may contain Authorization etc.
+    # - body: arbitrary JSON shape (dict, list, scalar)
+    # - raw_body: freeform text (HTML, plain-text 401/403). Token-shaped
+    #   substrings get regex-masked. The 4000-char cap on raw_body is a
+    #   readability limit, NOT a security control — JWTs fit in <4000.
+    payload["headers"] = scrub_any(payload["headers"])
+    payload["body"] = scrub_any(payload["body"])
+    if payload["raw_body"] is not None:
+        payload["raw_body"] = scrub_text(payload["raw_body"])
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     return out_path
 

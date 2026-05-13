@@ -1,5 +1,5 @@
 import pytest
-from src.redact import redact_token, scrub_dict
+from src.redact import redact_token, scrub_dict, scrub_text, scrub_any
 
 
 def test_redact_short_token_returns_dots():
@@ -144,3 +144,37 @@ def test_scrub_dict_does_not_mutate_input():
     original_repr = repr(payload)
     scrub_dict(payload)
     assert repr(payload) == original_repr
+
+
+def test_scrub_text_redacts_bearer_in_freeform_text():
+    leak = "eyJleaked_jwt_value_here_long_enough_to_match"
+    text = f"Forbidden: token Bearer {leak} is invalid"
+    out = scrub_text(text)
+    assert leak not in out
+    # The "Bearer X" mask should fire
+    assert "Bearer <redacted>" in out
+
+
+def test_scrub_text_redacts_jwt_in_html_body():
+    leak = "eyJabcdefghijklmnopqrstuvwxyz0123456789.payload.signature"
+    html = f"<html><body>session={leak}</body></html>"
+    out = scrub_text(html)
+    assert leak not in out
+    assert "<jwt-redacted>" in out
+
+
+def test_scrub_any_handles_list_of_dicts_at_top_level():
+    leak = "eyJlist_top_level_token_value"
+    payload = [{"access_token": leak}, {"plan": "plus"}]
+    out = scrub_any(payload)
+    rendered = repr(out)
+    assert leak not in rendered
+    # non-secret preserved
+    assert out[1]["plan"] == "plus"
+
+
+def test_scrub_any_passes_through_non_collection_non_string():
+    assert scrub_any(42) == 42
+    assert scrub_any(None) is None
+    assert scrub_any(True) is True
+    assert scrub_any(3.14) == 3.14
