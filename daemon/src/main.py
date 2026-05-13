@@ -100,12 +100,21 @@ class Orchestrator:
 
     async def _claude_loop(self) -> None:
         token = load_claude_token()
+        if token:
+            log.info("claude token loaded (%d chars)", len(token))
+        else:
+            log.warning("no Claude token found — claude.ok stays False. Set "
+                        "~/.claude/.credentials.json or grant Python keychain "
+                        "access to 'Claude Code-credentials'.")
         while not self._stopped.is_set():
             # Probe FIRST, then wait — so the first poll happens before any
             # external stop() can race the loop.
             if token:
                 try:
                     block = probe_claude(token)
+                    log.info("claude probe: ok=%s s=%s%% w=%s%% st=%s",
+                             block.get("ok"), block.get("s"),
+                             block.get("w"), block.get("st"))
                     self.state.update_claude(block)
                     self.state.update_codex(codex_stub())
                     self._dirty.set()
