@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 from pathlib import Path
 from .ble_writer import BleWriter
 from .claude_probe import probe_claude
@@ -23,17 +24,52 @@ from .state import State
 log = logging.getLogger("clawdmeter.main")
 
 CLAUDE_CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
+CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 SUPERSET_STATE_PATH = Path.home() / ".superset" / "app-state.json"
 
 
-def load_claude_token() -> str | None:
-    if not CLAUDE_CREDS_PATH.exists():
+def _load_keychain_credentials() -> dict | None:
+    """Read Claude Code's OAuth credentials from macOS Keychain.
+
+    Claude Code on macOS stores its tokens in a generic-password keychain item
+    named "Claude Code-credentials" instead of writing a credentials file. The
+    payload is a JSON blob like {"claudeAiOauth": {"accessToken": "..."}}.
+    """
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or not result.stdout:
         return None
     try:
-        data = json.loads(CLAUDE_CREDS_PATH.read_text())
+        return json.loads(result.stdout.strip())
     except Exception:
         return None
-    return data.get("accessToken") or data.get("access_token")
+
+
+def load_claude_token() -> str | None:
+    """Resolve the Anthropic OAuth access token from (in order):
+    1. ~/.claude/.credentials.json    — upstream Linux path
+    2. macOS Keychain "Claude Code-credentials" generic password
+    """
+    if CLAUDE_CREDS_PATH.exists():
+        try:
+            data = json.loads(CLAUDE_CREDS_PATH.read_text())
+            token = data.get("accessToken") or data.get("access_token")
+            if token:
+                return token
+        except Exception:
+            pass
+    kc = _load_keychain_credentials()
+    if kc:
+        oauth = kc.get("claudeAiOauth") or {}
+        token = oauth.get("accessToken") or kc.get("accessToken") or kc.get("access_token")
+        if token:
+            return token
+    return None
 
 
 def load_superset_state() -> dict | None:
