@@ -1,0 +1,60 @@
+{
+  "tabsState": {
+    "activeTabIds": {
+      "ws-1": "tab-claude-rotator",
+      "ws-2": "tab-codex-katman"
+    },
+    "focusedPaneIds": {
+      "tab-claude-rotator": "pane-claude-rotator",
+      "tab-codex-katman": "pane-codex-katman",
+      "tab-misc": "pane-terminal"
+    },
+    "panes": {
+      "pane-claude-rotator": {
+        "id": "pane-claude-rotator",
+        "tabId": "tab-claude-rotator",
+        "type": "terminal",
+        "name": "⠂ Claude Code",
+        "status": "running",
+        "cwd": "/Users/test/.superset/worktrees/rotator/main",
+        "cwdConfirmed": true
+      },
+      "pane-codex-katman": {
+        "id": "pane-codex-katman",
+        "tabId": "tab-codex-katman",
+        "type": "terminal",
+        "name": "Codex",
+        "status": "running",
+        "cwd": "/Users/test/.superset/worktrees/katman/feature",
+        "cwdConfirmed": true
+      },
+      "pane-terminal": {
+        "id": "pane-terminal",
+        "tabId": "tab-misc",
+        "type": "terminal",
+        "name": "Terminal",
+        "status": "idle",
+        "cwd": "/Users/test/projects/other",
+        "cwdConfirmed": true
+      },
+      "pane-claude-idle": {
+        "id": "pane-claude-idle",
+        "tabId": "tab-misc",
+        "type": "terminal",
+        "name": "✳ Claude Code",
+        "status": "idle",
+        "cwd": "/Users/test/.superset/worktrees/whip/feature",
+        "cwdConfirmed": true
+      },
+      "pane-claude-busy": {
+        "id": "pane-claude-busy",
+        "tabId": "tab-misc",
+        "type": "terminal",
+        "name": "⠂ Claude Code",
+        "status": "running",
+        "cwd": "/Users/test/.superset/worktrees/atlas-book/main",
+        "cwdConfirmed": true
+      }
+    }
+  }
+}
