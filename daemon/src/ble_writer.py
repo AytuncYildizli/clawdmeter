@@ -33,12 +33,18 @@ class BleWriter:
         will reconnect and the next write will go through."""
         client = self._client
         if client is None or not client.is_connected:
+            log.debug("skip write: not connected")
             return
         data = json.dumps(payload).encode("utf-8")
         try:
-            await client.write_gatt_char(RX_CHAR_UUID, data)
+            await client.write_gatt_char(RX_CHAR_UUID, data, response=False)
+            log.info("wrote %d bytes: claude.ok=%s claude.s=%s focus.agent=%s",
+                     len(data),
+                     payload.get("claude", {}).get("ok"),
+                     payload.get("claude", {}).get("s"),
+                     payload.get("focus", {}).get("agent"))
         except Exception as e:
-            log.warning("write failed: %s", e)
+            log.warning("write failed (%d bytes): %s", len(data), e)
             # Force a reconnect on next loop iteration
             await self._disconnect()
 
