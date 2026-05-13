@@ -41,6 +41,36 @@ def test_load_api_key_mode_marked_unsupported(tmp_path):
 def test_redacted_repr_is_safe():
     auth = load_auth(FIXTURES / "auth-sample.json")
     text = repr(auth)
+    # All three token fields must be redacted in repr
     assert "eyJaccess_fake_payload_fake_signature" not in text
+    assert "eyJrefresh_fake_payload_fake_signature" not in text
+    assert "eyJid_fake_payload_fake_signature" not in text
     assert "…" in text
     assert "ChatGPT" in text  # non-secret is preserved
+
+
+def test_load_missing_tokens_dict_treats_tokens_as_none():
+    """Edge case: auth.json with no `tokens` key should yield CodexAuth
+    with all-None token fields, not raise."""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"auth_mode": "ChatGPT", "last_refresh": None}, f)
+        path = Path(f.name)
+    try:
+        auth = load_auth(path)
+        assert auth.mode == "ChatGPT"
+        assert auth.access_token is None
+        assert auth.refresh_token is None
+        assert auth.id_token is None
+    finally:
+        path.unlink()
+
+
+def test_load_empty_tokens_dict_yields_none_fields(tmp_path):
+    """Edge case: tokens={} should produce all-None token fields."""
+    f = tmp_path / "empty_tokens.json"
+    f.write_text(json.dumps({"auth_mode": "ChatGPT", "tokens": {}, "last_refresh": None}))
+    auth = load_auth(f)
+    assert auth.access_token is None
+    assert auth.refresh_token is None
+    assert auth.id_token is None

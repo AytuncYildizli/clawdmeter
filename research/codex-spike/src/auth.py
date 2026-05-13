@@ -1,5 +1,10 @@
 """Loader for ~/.codex/auth.json. Refuses to operate on non-ChatGPT modes
-(the daemon's spec only covers ChatGPT-mode probing)."""
+(the daemon's spec only covers ChatGPT-mode probing).
+
+WARNING: ``dataclasses.asdict()`` and ``CodexAuth.__dict__`` bypass the
+redacting ``__repr__`` and expose raw tokens. Never log via those — use
+``repr()`` or address fields explicitly.
+"""
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,9 +40,15 @@ def load_auth(path: Path) -> CodexAuth:
     try:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as e:
-        raise AuthError(f"failed to parse auth file: {e}") from e
+        # Generic message — JSONDecodeError.str can surface bytes around the
+        # parse failure, which for ~/.codex/auth.json may include token chars.
+        # `from e` keeps the original exception in the traceback chain for
+        # debug-mode tracebacks without exposing it in the public message.
+        raise AuthError("failed to parse auth file") from e
 
     mode = data.get("auth_mode")
+    # Strict compare: Codex writes "ChatGPT" literally. If the format ever drifts
+    # (whitespace, casing), fail loud rather than paper over upstream changes.
     if mode != "ChatGPT":
         raise AuthError(f"unsupported auth_mode={mode!r}; this spike only handles ChatGPT")
 
