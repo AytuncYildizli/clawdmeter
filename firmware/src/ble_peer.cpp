@@ -82,4 +82,12 @@ void tick() {
     // NimBLE handles its own event pump; nothing required here for now.
 }
 
+bool is_connected() {
+    // NimBLE 2.x: getServer() returns the singleton created in begin();
+    // getConnectedCount() reports active centrals. No subscription state
+    // required — a paired daemon counts as connected.
+    NimBLEServer* srv = NimBLEDevice::getServer();
+    return srv != nullptr && srv->getConnectedCount() > 0;
+}
+
 }  // namespace ble_peer

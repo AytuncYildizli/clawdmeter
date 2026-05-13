@@ -17,5 +17,8 @@ void begin(PayloadCallback cb);
 void request_refresh();
 // Call periodically from loop() — handles any pending work
 void tick();
+// True iff at least one BLE central is currently connected (NimBLE 2.x).
+// Used by the BLE status page to render Connected vs Disconnected.
+bool is_connected();
 
 }  // namespace ble_peer
