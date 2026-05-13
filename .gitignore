@@ -13,8 +13,8 @@ firmware/.vscode/
 tools/node_modules/
 tools/package-lock.json
 
-# Codex spike: never commit unsanitized captures
-research/codex-spike/fixtures/responses/*.raw.json
+# Codex spike: never commit captures (they contain PII even after secret-scrubbing)
+research/codex-spike/fixtures/responses/
 research/codex-spike/.venv/
 research/codex-spike/__pycache__/
 research/codex-spike/**/__pycache__/
