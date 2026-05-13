@@ -10,6 +10,7 @@
 #include "ble_peer.h"
 #include "ble_hid.h"
 #include "buttons.h"
+#include "splash.h"
 
 // LVGL display buffer — partial mode, 10 scanlines wide.
 static lv_display_t* g_disp;
@@ -72,6 +73,7 @@ void setup() {
     g_meter = ui_meter::build(lv_scr_act());
     ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen);
     lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
+    splash::init(lv_scr_act());
     rotate::reset(g_rotate, millis());
 
     // Stub state for visual verification before first BLE payload arrives.
@@ -92,6 +94,15 @@ void setup() {
 void loop() {
     M5.update();
     buttons::tick(g_state.focus.agent);
+    if (buttons::consume_splash_toggle()) {
+        if (splash::is_visible()) {
+            splash::hide();
+        } else {
+            bool on_codex =
+                (ui_pager::current(g_pager) == ui_pager::Page::Codex);
+            splash::show(on_codex);
+        }
+    }
     lv_tick_inc(50);
     lv_timer_handler();
 
