@@ -8,6 +8,8 @@
 #include "ui_pager.h"
 #include "auto_rotate.h"
 #include "ble_peer.h"
+#include "ble_hid.h"
+#include "buttons.h"
 
 // LVGL display buffer — partial mode, 10 scanlines wide.
 static lv_display_t* g_disp;
@@ -83,11 +85,13 @@ void setup() {
     ble_peer::begin([](const data::PayloadState& parsed) {
         g_state = parsed;
     });
+    ble_hid::begin();  // reuses NimBLE server already created by ble_peer
     ble_peer::request_refresh();  // ask daemon for current state on boot
 }
 
 void loop() {
     M5.update();
+    buttons::tick(g_state.focus.agent);
     lv_tick_inc(50);
     lv_timer_handler();
 
