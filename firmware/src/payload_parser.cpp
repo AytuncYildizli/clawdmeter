@@ -43,6 +43,25 @@ bool parse_payload(const char* json, size_t len, data::PayloadState& out) {
     copy_safe(out.focus.repo, sizeof(out.focus.repo), focus["repo"] | "");
     out.focus.sessions = focus["sessions"] | 0;
 
+    // Multi-account pool — read up to MAX_CLAUDE_ACCOUNTS entries.
+    // Keys follow the wire-compact shape: n, s, sr, w, wr, ok, a.
+    out.claude_account_count = 0;
+    auto accounts_arr = doc["claude_accounts"].as<JsonArrayConst>();
+    if (!accounts_arr.isNull()) {
+        for (JsonObjectConst row : accounts_arr) {
+            if (out.claude_account_count >= data::MAX_CLAUDE_ACCOUNTS) break;
+            auto& slot = out.claude_accounts[out.claude_account_count];
+            copy_safe(slot.name, sizeof(slot.name), row["n"] | "");
+            slot.s  = row["s"]  | 0;
+            slot.sr = row["sr"] | 0;
+            slot.w  = row["w"]  | 0;
+            slot.wr = row["wr"] | 0;
+            slot.ok = row["ok"] | false;
+            slot.active = row["a"] | false;
+            out.claude_account_count++;
+        }
+    }
+
     out.initialized = true;
     return true;
 }

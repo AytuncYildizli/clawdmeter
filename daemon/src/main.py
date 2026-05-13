@@ -19,6 +19,7 @@ from .ble_writer import BleWriter
 from .claude_probe import probe_claude
 from .codex_stub import codex_stub
 from .codex_probe import probe_codex
+from .account_pool import AccountPool, Account
 from .superset_state import read_focus, FocusInfo
 from .state import State
 
@@ -117,38 +118,67 @@ class Orchestrator:
         self._refresh.set()
 
     async def _claude_loop(self) -> None:
-        # Re-read the token on every iteration so account switches in Claude Code
-        # (which rewrite the Keychain entry) are picked up without a daemon restart.
-        last_token_hash: int | None = None
+        # Multi-account aggregator. Each tick:
+        #   1. Snapshot current Keychain entry into the persistent pool — picks
+        #      up new accounts as the user rotates Claude Code logins.
+        #   2. Probe every non-expired account in the pool for fresh rate
+        #      limits. Expired tokens are kept in the pool but reported as
+        #      stale (ok=False, last-known data preserved).
+        #   3. Build a compact account roll-up (top 3 by recency) for the BLE
+        #      payload and set claude.* to the active account for back-compat.
+        pool = AccountPool()
+        per_account_cache: dict[str, dict] = {}  # acct_id -> last probe block
+        loop = asyncio.get_running_loop()
+
         while not self._stopped.is_set():
-            token = load_claude_token()
-            # Log only when the token actually changes — not every 60s.
-            token_hash = hash(token) if token else None
-            if token_hash != last_token_hash:
-                if token:
-                    log.info("claude token loaded (%d chars)", len(token))
-                else:
-                    log.warning("no Claude token found — claude.ok stays False. "
-                                "Set ~/.claude/.credentials.json or grant "
-                                "Python access to 'Claude Code-credentials'.")
-                last_token_hash = token_hash
-            # Probe FIRST, then wait — so the first poll happens before any
-            # external stop() can race the loop.
-            if token:
-                try:
-                    block = probe_claude(token)
-                    log.info("claude probe: ok=%s s=%s%% w=%s%% st=%s",
-                             block.get("ok"), block.get("s"),
-                             block.get("w"), block.get("st"))
-                    self.state.update_claude(block)
-                    # Codex via local-SQLite-tail workaround (codex_probe). Falls
-                    # back to stub-shape ok=False if no fresh data found.
-                    self.state.update_codex(probe_codex())
-                    self._dirty.set()
-                except Exception as e:
-                    log.warning("claude probe failed: %s", e)
+            now_epoch = int(asyncio.get_running_loop().time())  # monotonic; only diffs matter
+            wall_epoch = int(__import__("time").time())
+            active = pool.snapshot_current(wall_epoch)
+            accounts = pool.list_accounts()
+            if not accounts:
+                log.warning("no Claude accounts in pool — no Keychain entry found")
             else:
-                log.debug("no claude token; skipping probe")
+                # Probe each account whose token is still valid. Run in a thread
+                # pool so the urllib calls don't block the asyncio loop.
+                async def _probe(acct: Account) -> tuple[Account, dict]:
+                    if acct.is_token_expired(wall_epoch * 1000):
+                        return acct, {"s": 0, "sr": 0, "w": 0, "wr": 0,
+                                       "st": "expired", "ok": False}
+                    block = await loop.run_in_executor(
+                        None, probe_claude, acct.access_token, wall_epoch
+                    )
+                    return acct, block
+
+                results = await asyncio.gather(
+                    *[_probe(a) for a in accounts], return_exceptions=True
+                )
+                wire_rows = []
+                for r in results:
+                    if isinstance(r, BaseException):
+                        log.warning("account probe error: %s", r)
+                        continue
+                    acct, block = r
+                    per_account_cache[acct.id] = block
+                    wire_rows.append({
+                        "n": acct.display_name(),
+                        "s": int(block.get("s") or 0),
+                        "sr": int(block.get("sr") or 0),
+                        "w": int(block.get("w") or 0),
+                        "wr": int(block.get("wr") or 0),
+                        "ok": bool(block.get("ok")),
+                        "a": acct.id == pool.active_id,
+                    })
+
+                # Active account block remains in `claude` for back-compat.
+                if active and active.id in per_account_cache:
+                    active_block = per_account_cache[active.id]
+                    log.info("claude probe (active=%s): ok=%s s=%s%% w=%s%%",
+                             active.display_name(), active_block.get("ok"),
+                             active_block.get("s"), active_block.get("w"))
+                    self.state.update_claude(active_block)
+                self.state.update_claude_accounts(wire_rows)
+                self.state.update_codex(probe_codex())
+                self._dirty.set()
             # Wait for next interval OR a refresh request
             try:
                 await asyncio.wait_for(self._refresh.wait(), timeout=self.poll_interval)

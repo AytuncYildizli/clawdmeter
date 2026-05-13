@@ -213,7 +213,66 @@ void refresh_status_footer(ScreenWidgets& w, uint32_t last_payload_millis) {
     lv_label_set_text(w.status_label, label);
 }
 
-void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
+// Build the "5h glance / pool / switch suggestion" line that lives at y=120.
+// Three modes:
+//   1. Single-account pool: "5h X% left"
+//   2. Multi-account pool, no urgency: "acct-bbbb 87% · acct-cccc 92%"
+//   3. Active drained AND a backup has headroom: "SWITCH -> acct-cccc 92%"
+//      (rendered in accent color to draw the eye)
+// Returns true if it set the switch-suggestion (caller uses the accent color).
+bool compose_pool_line(char* out, size_t cap,
+                       const data::PayloadState& state,
+                       int hourly_left, int weekly_left) {
+    // Collect non-active accounts that are ok.
+    int best_other_left = -1;
+    const data::AccountSummary* best_other = nullptr;
+    for (int i = 0; i < state.claude_account_count; ++i) {
+        const auto& acc = state.claude_accounts[i];
+        if (acc.active || !acc.ok) continue;
+        int left_w = 100 - acc.w;
+        if (left_w < 0) left_w = 0;
+        if (left_w > best_other_left) {
+            best_other_left = left_w;
+            best_other = &acc;
+        }
+    }
+
+    // Mode 3: switch suggestion.
+    if (state.claude_account_count > 1
+        && weekly_left >= 0 && weekly_left < 20
+        && best_other != nullptr && best_other_left > 70) {
+        std::snprintf(out, cap, "SWITCH -> %s %d%%",
+                      best_other->name, best_other_left);
+        return true;
+    }
+
+    // Mode 2: roll-up of up to 2 non-active accounts.
+    if (state.claude_account_count > 1) {
+        int written = 0;
+        int rendered = 0;
+        for (int i = 0; i < state.claude_account_count && rendered < 2; ++i) {
+            const auto& acc = state.claude_accounts[i];
+            if (acc.active) continue;
+            int left_w = acc.ok ? (100 - acc.w) : 0;
+            if (left_w < 0) left_w = 0;
+            const char* sep = (rendered == 0) ? "" : " | ";
+            int n = std::snprintf(out + written, cap - written,
+                                  "%s%s %d%%", sep, acc.name, left_w);
+            if (n < 0 || (size_t)(written + n) >= cap) break;
+            written += n;
+            rendered++;
+        }
+        if (rendered > 0) return false;
+        // Fall through if we somehow had a count but no renderable rows.
+    }
+
+    // Mode 1: classic single-account 5h glance.
+    std::snprintf(out, cap, "5h %d%% left", hourly_left);
+    return false;
+}
+
+void refresh_one(ScreenWidgets& w, const data::PayloadState& state,
+                 const data::ProviderBlock& block,
                  const data::FocusBlock& focus, const char* provider_name,
                  lv_color_t accent, bool is_active_pager, bool /*show_7d*/,
                  uint32_t last_payload_millis) {
@@ -268,12 +327,18 @@ void refresh_one(ScreenWidgets& w, const data::ProviderBlock& block,
         lv_label_set_text(w.reset_label, "");
     }
 
-    // Secondary tick = the 5h glance ("5h X% left")
+    // Secondary tick — 3-mode: solo 5h glance, multi-account roll-up, or
+    // switch-suggestion. Switch suggestion uses the accent color to grab
+    // attention; the other two stay dim gray.
     if (block.ok) {
-        std::snprintf(buf, sizeof(buf), "5h %d%% left", hourly_left);
+        bool switch_mode = compose_pool_line(buf, sizeof(buf), state,
+                                             hourly_left, weekly_left);
         lv_label_set_text(w.secondary_tick, buf);
+        lv_obj_set_style_text_color(w.secondary_tick,
+                                    switch_mode ? accent : lv_color_hex(0x666666), 0);
     } else {
         lv_label_set_text(w.secondary_tick, "");
+        lv_obj_set_style_text_color(w.secondary_tick, lv_color_hex(0x666666), 0);
     }
 
     // Repo label
@@ -313,11 +378,11 @@ MeterScreens build(lv_obj_t* parent) {
 
 void refresh(MeterScreens& /*screens*/, const data::PayloadState& state, bool show_7d) {
     // For v1, both screens always render; the pager controls visibility.
-    refresh_one(g_claude, state.claude, state.focus, "CLAUDE",
+    refresh_one(g_claude, state, state.claude, state.focus, "CLAUDE",
                 lv_color_hex(theme::CLAUDE_ACCENT),
-                /*is_active_pager*/ true,  // pager will adjust per swipe
+                /*is_active_pager*/ true,
                 show_7d, state.last_payload_millis);
-    refresh_one(g_codex, state.codex, state.focus, "CODEX",
+    refresh_one(g_codex, state, state.codex, state.focus, "CODEX",
                 lv_color_hex(theme::CODEX_ACCENT),
                 /*is_active_pager*/ false,
                 show_7d, state.last_payload_millis);
