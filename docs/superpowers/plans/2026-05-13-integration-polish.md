@@ -518,9 +518,98 @@ gh pr ready
 ## Out of scope (deferred)
 
 - OTA firmware updates
-- Splash sprite animation (busy-state variations, breathing pulse)
 - LCD dimming / sleep on inactivity
 - Multi-device support (one device per daemon for v1)
 - Linux portability of the daemon (macOS-only per spec)
 - Custom heavier display fonts (Inter-Bold etc — bigger flash footprint, defer)
 - BLE pairing on iOS/iPadOS — only macOS supported in v1
+
+---
+
+## Plan #4.5 — Visual parity with upstream
+
+After comparing to upstream's screenshots (https://github.com/HermannBjorgvin/Clawdmeter — Splash + Usage + Bluetooth pages), our v1 ships text-on-black; upstream has animated Aseprite sprites, rounded cards, battery indicator, and a Bluetooth status page. These tasks close the gap. They depend on Tasks 1-3 above being done (so we have a working baseline before iterating on look-and-feel).
+
+### Task 10: Animated Clawd sprite frames
+
+**Files:**
+- Create: `firmware/tools/clawd_frames/clawd_{idle,blink,wave,sleep}_80.png` (4 frames, 80×80)
+- Modify: `firmware/tools/rescale_sprites.py` (handle multi-frame directory)
+- Create: `firmware/src/assets/clawd_animation.h` (4-frame strip)
+- Modify: `firmware/src/splash.cpp` (cycle frames at ~5 FPS)
+
+Pixel-art four-frame animation: idle (open eyes), blink (closed eyes), wave (arm up), sleep (zZz). Each frame 80×80, upscale 2× to 160×160. The animation cycles: idle 0.6s → blink 0.1s → idle 0.6s → wave 0.4s → idle 0.6s → sleep 0.4s. Total cycle ~2.5s.
+
+Use [Aseprite](https://aseprite.org) or [Piskel](https://www.piskelapp.com) (free, browser) to author. Reference upstream's `@amaanbuilds` sprite style: simple silhouette, two square eyes, four limbs.
+
+LVGL animation: `lv_image_set_src(g_img, &g_frames[frame_idx])` on a timer every 100ms; advance `frame_idx` based on cycle state.
+
+Out-of-scope here: codex animation. Codex keeps the procedural label (Task 4 of this plan replaces with static sprite; animation is Plan #5).
+
+### Task 11: Bluetooth status page (third swipe page)
+
+**Files:**
+- Create: `firmware/src/ui_ble_page.h`
+- Create: `firmware/src/ui_ble_page.cpp`
+- Modify: `firmware/src/ui_pager.h` (add third page)
+- Modify: `firmware/src/ble_peer.cpp` (expose connection state)
+- Modify: `firmware/src/main.cpp` (wire pager → ble_page)
+
+Third swipe page (Claude ← → Codex ← → Bluetooth). Shows:
+- Connection state: "Connected" (green) or "Disconnected" (gray)
+- Peer device address (the daemon's MAC) once paired
+- "Built by @hermannbjorgvin / Ported by @AytuncYildizli / Codex tracking spike" credits at bottom (small)
+- A "RESET BOND" button (LVGL `lv_button_create`) wired to `NimBLEDevice::deleteAllBonds()`
+
+NimBLE connection-state hook: `NimBLEServerCallbacks::onConnect`/`onDisconnect`. Update a global flag the UI polls in refresh.
+
+### Task 12: Battery indicator + progress bars
+
+**Files:**
+- Modify: `firmware/src/ui_meter.cpp`
+
+Two simple polish items on every meter page:
+
+**Battery indicator (top-right):** `M5.Power.getBatteryLevel()` returns 0-100. Render as a small 24×12 icon (rectangle outline + filled portion) plus the percentage. Use 4 charge-state colors: red <20%, yellow <50%, green ≥50%. Update once a second (no need to poll faster).
+
+**Progress bar under the big number:** `lv_bar_create` set to the same value as the big number. Rounded corners (10px radius), 200×8, accent color (Claude orange or Codex teal depending on which screen). The big-number `71%` text stays; the bar adds a visual aid for the eye.
+
+### Task 13: Rounded card layout
+
+**Files:**
+- Modify: `firmware/src/ui_meter.cpp`
+
+Currently labels float on a solid black background. Wrap the central content (provider tag + big number + reset label + secondary tick + repo label) in an `lv_obj_t` "card":
+- Width 280, height 180, rounded corners (15px radius)
+- Background `theme::BG` (still near-black but distinct from screen background)
+- Border 1px, color `theme::TEXT_SECONDARY` at 30% opacity OR no border with subtle inner shadow
+- Padding 12px
+
+Then the screen background can be a slightly different color (e.g. `0x080808` near-pure-black with a subtle gradient via `lv_obj_set_style_bg_grad_color`). Upstream's screenshot uses this exact card-on-darker-bg pattern.
+
+### Task 14: Status footer ("Baking…", "Synced", "Stale")
+
+**Files:**
+- Modify: `firmware/src/ui_meter.cpp`
+- Modify: `firmware/src/main.cpp` (track last-write time)
+
+Below the repo label, add a small status line that surfaces the daemon's connection state to the user:
+
+| State | Label | Color |
+|---|---|---|
+| Never received payload yet | "Waiting…" | gray |
+| Last payload < 5 min ago | "Synced" | green dot + gray text |
+| Last payload 5-60 min ago | "Stale" | yellow dot |
+| Last payload > 60 min ago | "Offline" | red dot |
+| Claude probe in flight (REQ fired) | "Baking…" | orange dot pulse |
+
+Hook: `main.cpp` tracks `last_payload_millis` updated in the `ble_peer::begin` payload callback. ui_meter::refresh reads it and computes the freshness bucket.
+
+---
+
+## Self-review checklist (updated)
+
+- [x] Display fix is Task 1 (P0, blocks everything else)
+- [x] Visual parity items (Tasks 10-14) come AFTER the integration items (Tasks 1-9) so we have a working baseline before chasing pixel-perfect
+- [x] No task assumes hardware that isn't already connected
+- [x] All credits flow back to @hermannbjorgvin and @amaanbuilds where their work is referenced
