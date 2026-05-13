@@ -18,3 +18,9 @@ research/codex-spike/fixtures/responses/
 research/codex-spike/.venv/
 research/codex-spike/__pycache__/
 research/codex-spike/**/__pycache__/
+
+# Daemon
+daemon/.venv/
+daemon/__pycache__/
+daemon/**/__pycache__/
+daemon/*.egg-info/
