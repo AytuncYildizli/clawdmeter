@@ -123,6 +123,8 @@ void loop() {
     lv_tick_inc(50);
     lv_timer_handler();
 
+    splash::tick(millis());
+
     bool show_7d = (rotate::current(g_rotate, millis()) == rotate::Frame::SevenDay);
     ui_meter::refresh(g_meter, g_state, show_7d);
 
