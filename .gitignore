@@ -12,3 +12,9 @@ firmware/.vscode/
 # Node tooling deps (npm install --no-save)
 tools/node_modules/
 tools/package-lock.json
+
+# Codex spike: never commit unsanitized captures
+research/codex-spike/fixtures/responses/*.raw.json
+research/codex-spike/.venv/
+research/codex-spike/__pycache__/
+research/codex-spike/**/__pycache__/
