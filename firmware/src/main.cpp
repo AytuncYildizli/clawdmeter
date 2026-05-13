@@ -5,6 +5,7 @@
 #include <cstring>
 #include "data.h"
 #include "ui_meter.h"
+#include "ui_pager.h"
 #include "auto_rotate.h"
 
 // LVGL display buffer — partial mode, 10 scanlines wide.
@@ -38,8 +39,18 @@ static void touch_read_cb(lv_indev_t* /*indev*/, lv_indev_data_t* data) {
 }
 
 static ui_meter::MeterScreens g_meter;
+static ui_pager::Pager g_pager;
 static rotate::State g_rotate;
 static data::PayloadState g_state{};
+
+static void screen_gesture_cb(lv_event_t* /*e*/) {
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (dir == LV_DIR_LEFT) {
+        ui_pager::on_swipe_left(g_pager);
+    } else if (dir == LV_DIR_RIGHT) {
+        ui_pager::on_swipe_right(g_pager);
+    }
+}
 
 void setup() {
     auto cfg = M5.config();
@@ -56,6 +67,8 @@ void setup() {
     lv_indev_set_read_cb(indev, touch_read_cb);
 
     g_meter = ui_meter::build(lv_scr_act());
+    ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen);
+    lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     rotate::reset(g_rotate, millis());
 
     // Stub state for visual verification before BLE lands.
