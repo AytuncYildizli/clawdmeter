@@ -55,6 +55,16 @@ ScreenWidgets build_screen(lv_obj_t* parent, lv_color_t accent) {
     lv_obj_clear_flag(w.card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(w.card);
 
+    // Vertical stack inside the 256x176 card-content area (after 12px padding).
+    // All widgets anchored to TOP_MID + explicit y so they don't overlap:
+    //   y=0   provider_tag    (~22px tall, montserrat_20)
+    //   y=26  big_number      (~52px tall, montserrat_48)
+    //   y=84  progress_bar    (8px)
+    //   y=98  reset_label     (~18px, montserrat_16)
+    //   y=120 secondary_tick  (~18px, montserrat_16)
+    //   y=142 repo_label      (~18px, montserrat_16)
+    //   y=162 status row      (6px dot + 14px label centered together)
+
     w.provider_tag = lv_label_create(w.card);
     lv_obj_set_style_text_color(w.provider_tag, accent, 0);
     lv_obj_set_style_text_font(w.provider_tag, &lv_font_montserrat_20, 0);
@@ -63,12 +73,11 @@ ScreenWidgets build_screen(lv_obj_t* parent, lv_color_t accent) {
     w.big_number = lv_label_create(w.card);
     lv_obj_set_style_text_color(w.big_number, lv_color_hex(theme::TEXT_PRIMARY), 0);
     lv_obj_set_style_text_font(w.big_number, &lv_font_montserrat_48, 0);
-    lv_obj_align(w.big_number, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(w.big_number, LV_ALIGN_TOP_MID, 0, 26);
 
-    // Progress bar under the big number.
     w.progress_bar = lv_bar_create(w.card);
     lv_obj_set_size(w.progress_bar, 200, 8);
-    lv_obj_align(w.progress_bar, LV_ALIGN_CENTER, 0, 50);
+    lv_obj_align(w.progress_bar, LV_ALIGN_TOP_MID, 0, 84);
     lv_bar_set_range(w.progress_bar, 0, 100);
     lv_obj_set_style_radius(w.progress_bar, 4, 0);
     lv_obj_set_style_radius(w.progress_bar, 4, LV_PART_INDICATOR);
@@ -80,35 +89,34 @@ ScreenWidgets build_screen(lv_obj_t* parent, lv_color_t accent) {
     w.reset_label = lv_label_create(w.card);
     lv_obj_set_style_text_color(w.reset_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(w.reset_label, &lv_font_montserrat_16, 0);
-    lv_obj_align(w.reset_label, LV_ALIGN_CENTER, 0, 60);
+    lv_obj_align(w.reset_label, LV_ALIGN_TOP_MID, 0, 98);
 
     w.secondary_tick = lv_label_create(w.card);
-    lv_obj_set_style_text_color(w.secondary_tick, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_color(w.secondary_tick, lv_color_hex(0x666666), 0);
     lv_obj_set_style_text_font(w.secondary_tick, &lv_font_montserrat_16, 0);
-    lv_obj_align(w.secondary_tick, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_align(w.secondary_tick, LV_ALIGN_TOP_MID, 0, 120);
 
     w.repo_label = lv_label_create(w.card);
     lv_obj_set_style_text_color(w.repo_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(w.repo_label, &lv_font_montserrat_16, 0);
-    lv_obj_align(w.repo_label, LV_ALIGN_BOTTOM_MID, 0, -22);
+    lv_obj_align(w.repo_label, LV_ALIGN_TOP_MID, 0, 142);
 
     // Freshness footer (Plan #4 Task 14): 6×6 colored dot + label inside the
-    // card, directly under repo_label. Communicates BLE payload age:
-    // Waiting…/Synced/Stale/Offline. Filled by refresh_one() from
-    // state.last_payload_millis.
+    // card. Dot and label sit on the same row at y=162; dot is to the left.
+    // Communicates BLE payload age: Waiting/Synced/Stale/Offline.
     w.status_dot = lv_obj_create(w.card);
     lv_obj_set_size(w.status_dot, 6, 6);
     lv_obj_set_style_radius(w.status_dot, 3, 0);
     lv_obj_set_style_border_width(w.status_dot, 0, 0);
     lv_obj_set_style_bg_color(w.status_dot, lv_color_hex(theme::TEXT_SECONDARY), 0);
     lv_obj_set_style_bg_opa(w.status_dot, LV_OPA_COVER, 0);
-    lv_obj_align(w.status_dot, LV_ALIGN_BOTTOM_LEFT, 60, -4);
+    lv_obj_align(w.status_dot, LV_ALIGN_TOP_MID, -36, 166);
 
     w.status_label = lv_label_create(w.card);
     lv_obj_set_style_text_color(w.status_label, lv_color_hex(theme::TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(w.status_label, &lv_font_montserrat_14, 0);
-    lv_label_set_text(w.status_label, "Waiting...");
-    lv_obj_align(w.status_label, LV_ALIGN_BOTTOM_LEFT, 72, -2);
+    lv_label_set_text(w.status_label, "Waiting");
+    lv_obj_align(w.status_label, LV_ALIGN_TOP_MID, 6, 162);
 
     // Two indicator dots — small bars (outside the card, on the root).
     w.dot_left = lv_obj_create(w.root);
