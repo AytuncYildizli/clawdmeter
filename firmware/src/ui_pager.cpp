@@ -4,8 +4,48 @@ namespace ui_pager {
 
 namespace {
 
-void show_only(Pager& p, Page page) {
+constexpr int32_t SCREEN_W = 320;
+constexpr uint32_t SLIDE_MS = 250;
+
+bool g_animating = false;
+lv_obj_t* g_outgoing = nullptr;
+
+// Hide the outgoing screen after the slide-out finishes. Called by LVGL when
+// the slide animation completes; clears the in-flight flag so back-to-back
+// swipes don't stomp on each other.
+void on_slide_done(lv_anim_t* /*a*/) {
+    if (g_outgoing != nullptr) {
+        lv_obj_add_flag(g_outgoing, LV_OBJ_FLAG_HIDDEN);
+        // Restore the now-hidden screen to its default x so the next swap
+        // doesn't start from an unexpected offset.
+        lv_obj_set_x(g_outgoing, 0);
+        g_outgoing = nullptr;
+    }
+    g_animating = false;
+}
+
+void start_slide(lv_obj_t* obj, int32_t from_x, int32_t to_x,
+                 lv_anim_completed_cb_t done_cb) {
+    lv_obj_set_x(obj, from_x);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, from_x, to_x);
+    lv_anim_set_duration(&a, SLIDE_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_exec_cb(&a, [](void* var, int32_t v) {
+        lv_obj_set_x(static_cast<lv_obj_t*>(var), v);
+    });
+    if (done_cb) lv_anim_set_completed_cb(&a, done_cb);
+    lv_anim_start(&a);
+}
+
+// Snap immediately (no animation) — used by init() and as a fallback when a
+// slide is already in flight.
+void show_only_immediate(Pager& p, Page page) {
     for (int i = 0; i < 2; ++i) {
+        lv_obj_set_x(p.screens[i], 0);
         if (static_cast<int>(page) == i) {
             lv_obj_clear_flag(p.screens[i], LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -15,20 +55,46 @@ void show_only(Pager& p, Page page) {
     p.current = page;
 }
 
+// Direction: -1 = next page slides in from the right (user swiped left);
+//            +1 = next page slides in from the left (user swiped right).
+void slide_to(Pager& p, Page next, int direction) {
+    if (next == p.current) return;
+    if (g_animating) {
+        // Mid-animation: skip to the final state instead of layering anims.
+        show_only_immediate(p, next);
+        return;
+    }
+    lv_obj_t* outgoing = p.screens[static_cast<int>(p.current)];
+    lv_obj_t* incoming = p.screens[static_cast<int>(next)];
+
+    g_animating = true;
+    g_outgoing = outgoing;
+    p.current = next;
+
+    // Outgoing slides off; incoming slides in from the opposite edge.
+    int32_t outgoing_to = (direction < 0) ? -SCREEN_W : SCREEN_W;
+    int32_t incoming_from = (direction < 0) ? SCREEN_W : -SCREEN_W;
+    start_slide(outgoing, 0, outgoing_to, on_slide_done);
+    start_slide(incoming, incoming_from, 0, nullptr);
+}
+
 }  // namespace
 
 void init(Pager& p, lv_obj_t* claude_screen, lv_obj_t* codex_screen) {
     p.screens[0] = claude_screen;
     p.screens[1] = codex_screen;
-    show_only(p, Page::Claude);
+    show_only_immediate(p, Page::Claude);
 }
 
 void on_swipe_left(Pager& p) {
-    show_only(p, p.current == Page::Claude ? Page::Codex : Page::Claude);
+    // Claude -> Codex (or Codex -> Claude if already on Codex)
+    Page next = (p.current == Page::Claude) ? Page::Codex : Page::Claude;
+    slide_to(p, next, -1);
 }
 
 void on_swipe_right(Pager& p) {
-    show_only(p, p.current == Page::Codex ? Page::Claude : Page::Codex);
+    Page next = (p.current == Page::Codex) ? Page::Claude : Page::Codex;
+    slide_to(p, next, +1);
 }
 
 Page current(const Pager& p) { return p.current; }
