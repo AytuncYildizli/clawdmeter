@@ -1,6 +1,7 @@
 #ifndef UNIT_TEST
 
 #include <M5Unified.h>
+#include <Wire.h>
 #include <lvgl.h>
 #include <cstring>
 #include "data.h"
@@ -60,29 +61,81 @@ int16_t g_touch_last_x = -1;
 int16_t g_touch_last_y = -1;
 bool g_touch_active = false;
 
+// Direct FT6x36 register dump for diagnostic. Reads registers 0x00..0x0F
+// from address 0x38 on Wire1 and emits any nonzero finger-event registers.
+// Runs at ~10Hz to keep serial output readable. When the user touches the
+// screen, if even register 0x02 (touch count) flips to a nonzero, we know
+// the chip senses contact and we're misreading via M5.Touch.
+static void touch_register_probe() {
+    static uint32_t last = 0;
+    uint32_t now = millis();
+    if (now - last < 100) return;
+    last = now;
+
+    uint8_t buf[16] = {0};
+    Wire1.beginTransmission(0x38);
+    Wire1.write(uint8_t(0x00));
+    if (Wire1.endTransmission(false) != 0) return;
+    Wire1.requestFrom((uint8_t)0x38, (uint8_t)16);
+    size_t got = 0;
+    while (Wire1.available() && got < sizeof(buf)) buf[got++] = Wire1.read();
+    if (got < 7) return;
+    // 0x02 = TD_STATUS (number of touch points)
+    // 0x03 = P1_XH (event flag + xH)
+    uint8_t td = buf[0x02];
+    if (td != 0 || buf[0x03] != 0 || buf[0x04] != 0) {
+        Serial.printf("[reg] td=%u P1 xH=%02X xL=%02X yH=%02X yL=%02X w=%02X misc=%02X\n",
+                      td, buf[0x03], buf[0x04], buf[0x05], buf[0x06], buf[0x07], buf[0x08]);
+    }
+}
+
 void poll_swipe() {
+    touch_register_probe();
+    M5.Touch.update(millis());  // force a fresh read
+    int touch_count = M5.Touch.getCount();
     auto t = M5.Touch.getDetail();
-    if (t.isPressed()) {
+    bool pressed = touch_count > 0;
+    int16_t tx = t.x;
+    int16_t ty = t.y;
+
+    static uint32_t dbg_heartbeat = 0;
+    if (millis() - dbg_heartbeat > 2000) {
+        Serial.printf("[touch-heartbeat] count=%d pressed=%d x=%d y=%d state=%d wasReleased=%d\n",
+                      touch_count, pressed, tx, ty, (int)t.state, (int)t.wasReleased());
+        dbg_heartbeat = millis();
+    }
+    static bool dbg_last_pressed = false;
+    if (pressed != dbg_last_pressed) {
+        Serial.printf("[touch] state=%s x=%d y=%d\n", pressed ? "PRESSED" : "RELEASED", tx, ty);
+        dbg_last_pressed = pressed;
+    }
+    if (pressed) {
         if (!g_touch_active) {
             g_touch_active = true;
-            g_touch_start_x = t.x;
-            g_touch_start_y = t.y;
+            g_touch_start_x = tx;
+            g_touch_start_y = ty;
         }
-        g_touch_last_x = t.x;
-        g_touch_last_y = t.y;
+        g_touch_last_x = tx;
+        g_touch_last_y = ty;
     } else if (g_touch_active) {
         g_touch_active = false;
         if (g_touch_start_x < 0 || g_touch_last_x < 0) return;
         int16_t dx = g_touch_last_x - g_touch_start_x;
         int16_t dy = g_touch_last_y - g_touch_start_y;
+        Serial.printf("[swipe] start=(%d,%d) end=(%d,%d) dx=%d dy=%d\n",
+                      g_touch_start_x, g_touch_start_y, g_touch_last_x, g_touch_last_y, dx, dy);
         int16_t adx = dx < 0 ? -dx : dx;
         int16_t ady = dy < 0 ? -dy : dy;
         if (adx >= SWIPE_THRESHOLD_PX && ady <= SWIPE_VERTICAL_LIMIT_PX) {
+            Serial.printf("[swipe] FIRED %s\n", dx < 0 ? "LEFT" : "RIGHT");
             if (dx < 0) {
                 ui_pager::on_swipe_left(g_pager);
             } else {
                 ui_pager::on_swipe_right(g_pager);
             }
+        } else {
+            Serial.printf("[swipe] rejected (adx=%d need>=%d, ady=%d need<=%d)\n",
+                          adx, SWIPE_THRESHOLD_PX, ady, SWIPE_VERTICAL_LIMIT_PX);
         }
     }
 }
@@ -100,8 +153,93 @@ static void screen_gesture_cb(lv_event_t* /*e*/) {
 
 void setup() {
     auto cfg = M5.config();
+    cfg.internal_imu = false;  // we don't use it; avoid contending on the I2C bus
+    cfg.internal_rtc = false;
     M5.begin(cfg);
+    Serial.begin(115200);
+    delay(100);
+    Serial.println("\n[boot] Clawdmeter starting...");
     M5.Display.setRotation(1);  // 320×240 landscape; Core 2's ILI9342C is native portrait
+
+    // ─── TOUCH CHIP IDENTIFICATION ─────────────────────────────────────────
+    // Stock Core 2 ships FT6336U at Wire1 0x38, but this device returns chipid
+    // 0x11 — wrong for FT6336U (0x64) and ambiguous for FT6206 (also 0x11) vs
+    // a totally different chip family. Scan BOTH I2C buses, identify every
+    // responder, then probe known touch-chip identity registers per family.
+    Serial.printf("[touch] M5.getBoard=%d (M5Stack=0/M5StackCore2=2/CoreS3=4)\n", (int)M5.getBoard());
+    Serial.printf("[touch] M5.Touch isEnabled=%d\n", (int)M5.Touch.isEnabled());
+
+    auto scan_bus = [](TwoWire& bus, const char* name) {
+        Serial.printf("[i2c-scan] === bus %s ===\n", name);
+        int found = 0;
+        for (uint8_t addr = 0x03; addr < 0x78; ++addr) {
+            bus.beginTransmission(addr);
+            uint8_t err = bus.endTransmission();
+            if (err == 0) {
+                Serial.printf("[i2c-scan] %s ACK @ 0x%02X\n", name, addr);
+                ++found;
+            }
+        }
+        Serial.printf("[i2c-scan] %s done, %d device(s)\n", name, found);
+    };
+    auto read_reg8 = [](TwoWire& bus, uint8_t addr, uint8_t reg) -> int {
+        bus.beginTransmission(addr);
+        bus.write(reg);
+        if (bus.endTransmission(false) != 0) return -1;
+        bus.requestFrom(addr, (uint8_t)1);
+        if (!bus.available()) return -1;
+        return bus.read();
+    };
+    auto read_reg16 = [](TwoWire& bus, uint8_t addr, uint16_t reg, uint8_t* buf, size_t n) -> bool {
+        // 16-bit register address (big-endian) — used by GT911 and similar
+        bus.beginTransmission(addr);
+        bus.write((reg >> 8) & 0xFF);
+        bus.write(reg & 0xFF);
+        if (bus.endTransmission(false) != 0) return false;
+        bus.requestFrom(addr, (uint8_t)n);
+        for (size_t i = 0; i < n; ++i) {
+            if (!bus.available()) return false;
+            buf[i] = bus.read();
+        }
+        return true;
+    };
+
+    scan_bus(Wire, "Wire(bus0)");
+    scan_bus(Wire1, "Wire1(bus1)");
+
+    // Identify chip families. Try each candidate address on Wire1 (Core 2 panel).
+    // FT6x06/FT6x36: 0x38, chipid @ 0xA8 (0x06=FT6206 0x36=FT6236 0x11=??? 0x64=FT6336U)
+    // GT911:          0x5D or 0x14, product-id at 16-bit reg 0x8140..0x8143 (ASCII "911")
+    // CST816S:        0x15, chipid at 0xA7 (returns 0xB4 for CST816S, 0xB5 CST716)
+    // CHSC6540:       0x2E, varies
+    // TT21100:        0x24, model id at 16-bit reg 0x0007
+    {
+        int v = read_reg8(Wire1, 0x38, 0xA8);
+        Serial.printf("[touch-id] Wire1 0x38 reg 0xA8 = 0x%02X (FT6336U=0x64, FT6236=0x36, FT6206=0x11)\n", v);
+        int firm = read_reg8(Wire1, 0x38, 0xA6);
+        int vendor = read_reg8(Wire1, 0x38, 0xA3);
+        Serial.printf("[touch-id] Wire1 0x38 firm=0x%02X vendor=0x%02X\n", firm, vendor);
+    }
+    for (uint8_t addr : {0x5D, 0x14}) {
+        uint8_t buf[4] = {0};
+        if (read_reg16(Wire1, addr, 0x8140, buf, 4)) {
+            Serial.printf("[touch-id] Wire1 0x%02X GT911 product-id = '%c%c%c%c' (expect '911\\0')\n",
+                          addr, buf[0], buf[1], buf[2], buf[3]);
+        } else {
+            Serial.printf("[touch-id] Wire1 0x%02X GT911 read FAILED\n", addr);
+        }
+    }
+    {
+        int chip = read_reg8(Wire1, 0x15, 0xA7);
+        Serial.printf("[touch-id] Wire1 0x15 reg 0xA7 = 0x%02X (CST816S=0xB4, CST716=0xB5)\n", chip);
+    }
+    // Same probe panel on Wire (bus 0) — some Core 2 variants wire touch to bus 0.
+    {
+        int v = read_reg8(Wire, 0x38, 0xA8);
+        Serial.printf("[touch-id] Wire 0x38 reg 0xA8 = 0x%02X\n", v);
+    }
+    Serial.println("[touch] === scan done ===");
+    // ───────────────────────────────────────────────────────────────────────
 
     // Boot indicator — orange flash for 800ms so flashes are visually distinguishable
     M5.Display.fillScreen(M5.Display.color565(0xFF, 0x8C, 0x42));
@@ -155,6 +293,19 @@ void loop() {
     M5.update();
     poll_swipe();  // own swipe detector — LVGL gestures unreliable at 50ms cadence
     buttons::tick(g_state.focus.agent);
+
+    // Bezel BtnA/BtnC are the primary swipe surface — this device's touch
+    // panel is firmware-locked and never reports finger contacts. BtnB still
+    // toggles splash. Auto-rotate stays as a tertiary fallback.
+    int swipe_intent = buttons::consume_swipe_intent();
+    if (swipe_intent < 0) {
+        Serial.println("[btn] BtnA -> swipe left");
+        ui_pager::on_swipe_left(g_pager);
+    } else if (swipe_intent > 0) {
+        Serial.println("[btn] BtnC -> swipe right");
+        ui_pager::on_swipe_right(g_pager);
+    }
+
     if (buttons::consume_splash_toggle()) {
         if (splash::is_visible()) {
             splash::hide();

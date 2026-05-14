@@ -6,44 +6,24 @@
 namespace buttons {
 
 static bool g_splash_pending = false;
+static int g_swipe_pending = 0;  // -1 = left, +1 = right, 0 = none
 
 void tick(data::AgentKind focus) {
-    // BtnA — "primary" action, agent-specific.
+    (void)focus;  // focused_agent kept in signature for future HID re-wiring
+
+    // BtnA -> page swipe left (Claude -> Codex)
     if (M5.BtnA.wasPressed()) {
-        switch (focus) {
-            case data::AgentKind::Claude:
-                ble_hid::send_key(ble_hid::Modifier::None, ble_hid::Key::Space);
-                break;
-            case data::AgentKind::Codex:
-                ble_hid::send_key(ble_hid::Modifier::None, ble_hid::Key::Escape);
-                break;
-            case data::AgentKind::None:
-            default:
-                // no-op when no agent is focused
-                break;
-        }
+        g_swipe_pending = -1;
     }
 
-    // BtnB — splash toggle (no HID, UI-only). Consumed by main loop.
+    // BtnB -> splash toggle (UI-only). Consumed by main loop.
     if (M5.BtnB.wasPressed()) {
         g_splash_pending = true;
     }
 
-    // BtnC — "secondary" action, agent-specific.
+    // BtnC -> page swipe right (Codex -> Claude)
     if (M5.BtnC.wasPressed()) {
-        switch (focus) {
-            case data::AgentKind::Claude:
-                // Shift+Tab — previous pane in Claude Code's terminal UI.
-                ble_hid::send_key(ble_hid::Modifier::LShift, ble_hid::Key::Tab);
-                break;
-            case data::AgentKind::Codex:
-                // Ctrl+Enter (a.k.a. Ctrl+J — newline in terminal contexts).
-                ble_hid::send_key(ble_hid::Modifier::LCtrl, ble_hid::Key::Enter);
-                break;
-            case data::AgentKind::None:
-            default:
-                break;
-        }
+        g_swipe_pending = +1;
     }
 }
 
@@ -53,6 +33,12 @@ bool consume_splash_toggle() {
         return true;
     }
     return false;
+}
+
+int consume_swipe_intent() {
+    int v = g_swipe_pending;
+    g_swipe_pending = 0;
+    return v;
 }
 
 }  // namespace buttons
