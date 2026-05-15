@@ -1,6 +1,7 @@
 #include "splash.h"
 
 #include "assets/clawd_animation.h"
+#include "assets/codex_sprite.h"
 #include "theme.h"
 
 namespace splash {
@@ -9,9 +10,10 @@ namespace {
 
 lv_obj_t* g_overlay = nullptr;
 lv_obj_t* g_clawd_img = nullptr;
-lv_obj_t* g_codex_label = nullptr;
+lv_obj_t* g_codex_img = nullptr;     // teal mascot (Gemini-generated 160x160)
 bool g_visible = false;
 lv_img_dsc_t g_frame_dsc[assets::CLAWD_FRAME_COUNT]{};
+lv_img_dsc_t g_codex_dsc{};
 int g_current_frame = 0;
 uint32_t g_last_advance = 0;
 
@@ -62,17 +64,17 @@ void init(lv_obj_t* parent) {
     lv_obj_align(g_clawd_img, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(g_clawd_img, LV_OBJ_FLAG_HIDDEN);
 
-    // Procedural Codex placeholder — bold teal "CODEX" label centered on
-    // the dark overlay. v1; real sprite art deferred.
-    g_codex_label = lv_label_create(g_overlay);
-    lv_label_set_text(g_codex_label, "CODEX");
-    lv_obj_set_style_text_color(g_codex_label,
-                                lv_color_hex(theme::CODEX_ACCENT), 0);
-#if LV_FONT_MONTSERRAT_48
-    lv_obj_set_style_text_font(g_codex_label, &lv_font_montserrat_48, 0);
-#endif
-    lv_obj_align(g_codex_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_flag(g_codex_label, LV_OBJ_FLAG_HIDDEN);
+    // Codex teal mascot — single static frame for now (the Clawd animation
+    // pipeline can be extended to Codex when we want a matching loop).
+    g_codex_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    g_codex_dsc.header.w = assets::CODEX_W;
+    g_codex_dsc.header.h = assets::CODEX_H;
+    g_codex_dsc.data = assets::CODEX_DATA;
+    g_codex_dsc.data_size = sizeof(assets::CODEX_DATA);
+    g_codex_img = lv_image_create(g_overlay);
+    lv_image_set_src(g_codex_img, &g_codex_dsc);
+    lv_obj_align(g_codex_img, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(g_codex_img, LV_OBJ_FLAG_HIDDEN);
 }
 
 void show(bool codex_palette) {
@@ -81,16 +83,20 @@ void show(bool codex_palette) {
     }
 
     if (codex_palette) {
-        lv_obj_set_style_bg_color(g_overlay, lv_color_hex(theme::BG), 0);
+        // Codex: teal mascot on a soft teal backdrop, mirroring the Claude
+        // splash's orange-on-Clawd composition for visual symmetry.
+        lv_obj_set_style_bg_color(g_overlay,
+                                  lv_color_hex(theme::CODEX_ACCENT), 0);
+        lv_obj_set_style_bg_opa(g_overlay, LV_OPA_COVER, 0);
         lv_obj_add_flag(g_clawd_img, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(g_codex_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_codex_img, LV_OBJ_FLAG_HIDDEN);
     } else {
         // Claude: animated Clawd with a soft orange backdrop for visual punch.
         lv_obj_set_style_bg_color(g_overlay,
                                   lv_color_hex(theme::CLAUDE_ACCENT), 0);
         lv_obj_set_style_bg_opa(g_overlay, LV_OPA_COVER, 0);
         lv_obj_clear_flag(g_clawd_img, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(g_codex_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_codex_img, LV_OBJ_FLAG_HIDDEN);
         // Reset to idle frame so the user sees a known starting pose.
         apply_frame(0);
         g_last_advance = 0;  // tick() will reseed on the next call

@@ -204,13 +204,16 @@ void setup() {
     Serial.println("[touch] === scan done ===");
     // ───────────────────────────────────────────────────────────────────────
 
-    // Boot indicator — orange flash for 800ms so flashes are visually distinguishable
-    M5.Display.fillScreen(M5.Display.color565(0xFF, 0x8C, 0x42));
-    M5.Display.setCursor(10, 10);
-    M5.Display.setTextColor(0xFFFF, M5.Display.color565(0xFF, 0x8C, 0x42));
-    M5.Display.setTextSize(2);
-    M5.Display.print("CLAWDMETER BOOT");
-    delay(800);
+    // Clean boot — black screen + dim wordmark briefly. The bright-orange
+    // debug splash from the flash-iteration era is gone now that we trust
+    // the pipeline; this gives a subtle "device is alive" beat before the
+    // meter appears.
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(0x4208, TFT_BLACK);  // soft dim gray
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(100, 115);
+    M5.Display.print("clawdmeter");
+    delay(500);
 
     lv_init();
     g_disp = lv_display_create(320, 240);

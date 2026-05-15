@@ -213,11 +213,20 @@ void refresh_status_footer(ScreenWidgets& w, uint32_t last_payload_millis) {
     lv_label_set_text(w.status_label, label);
 }
 
+// Trim the "acct-" prefix the daemon emits for unnamed accounts so the
+// rendered label is just the 4-char hash suffix (visual: "9b7c" not
+// "acct-9b7c"). User-set labels (e.g. "work") are kept verbatim.
+const char* short_label(const char* name) {
+    if (name && std::strncmp(name, "acct-", 5) == 0) return name + 5;
+    return name ? name : "?";
+}
+
 // Build the "5h glance / pool / switch suggestion" line that lives at y=120.
 // Three modes:
 //   1. Single-account pool: "5h X% left"
-//   2. Multi-account pool, no urgency: "acct-bbbb 87% · acct-cccc 92%"
-//   3. Active drained AND a backup has headroom: "SWITCH -> acct-cccc 92%"
+//   2. Multi-account pool, no urgency: "9b7c 87%   c1f2 92%"
+//      (trimmed labels, double-space separator for breathing room)
+//   3. Active drained AND a backup has headroom: "SWITCH -> 9b7c 92%"
 //      (rendered in accent color to draw the eye)
 // Returns true if it set the switch-suggestion (caller uses the accent color).
 bool compose_pool_line(char* out, size_t cap,
@@ -242,7 +251,7 @@ bool compose_pool_line(char* out, size_t cap,
         && weekly_left >= 0 && weekly_left < 20
         && best_other != nullptr && best_other_left > 70) {
         std::snprintf(out, cap, "SWITCH -> %s %d%%",
-                      best_other->name, best_other_left);
+                      short_label(best_other->name), best_other_left);
         return true;
     }
 
@@ -255,9 +264,10 @@ bool compose_pool_line(char* out, size_t cap,
             if (acc.active) continue;
             int left_w = acc.ok ? (100 - acc.w) : 0;
             if (left_w < 0) left_w = 0;
-            const char* sep = (rendered == 0) ? "" : " | ";
+            const char* sep = (rendered == 0) ? "" : "   ";  // 3-space separator
             int n = std::snprintf(out + written, cap - written,
-                                  "%s%s %d%%", sep, acc.name, left_w);
+                                  "%s%s %d%%", sep,
+                                  short_label(acc.name), left_w);
             if (n < 0 || (size_t)(written + n) >= cap) break;
             written += n;
             rendered++;
@@ -294,12 +304,25 @@ void refresh_one(ScreenWidgets& w, const data::PayloadState& state,
     if (hourly_left < 0) hourly_left = 0;
     if (hourly_left > 100) hourly_left = 100;
 
-    // Big number = weekly LEFT
+    // Big number = weekly LEFT, color-coded by threshold:
+    //   >= 30%  -> white (plenty)
+    //   10-29%  -> yellow (getting low)
+    //   <  10%  -> red (critical)
+    // Same colors apply to the progress bar's indicator so both signal
+    // urgency together. !ok keeps the dim gray placeholder.
     if (!block.ok) {
         lv_label_set_text(w.big_number, "--");
+        lv_obj_set_style_text_color(w.big_number,
+                                    lv_color_hex(theme::TEXT_PRIMARY), 0);
     } else {
         std::snprintf(buf, sizeof(buf), "%d%%", weekly_left);
         lv_label_set_text(w.big_number, buf);
+        uint32_t big_color = theme::TEXT_PRIMARY;
+        if (weekly_left < 10)      big_color = 0xFF4444;  // red
+        else if (weekly_left < 30) big_color = 0xFFCC00;  // yellow
+        lv_obj_set_style_text_color(w.big_number, lv_color_hex(big_color), 0);
+        lv_obj_set_style_bg_color(w.progress_bar,
+                                  lv_color_hex(big_color), LV_PART_INDICATOR);
     }
 
     // Progress bar = weekly LEFT (fills toward 100 when fresh, drains as used)
