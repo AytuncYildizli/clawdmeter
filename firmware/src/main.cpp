@@ -13,6 +13,7 @@
 #include "buttons.h"
 #include "splash.h"
 #include "touch_driver.h"
+#include "theme.h"
 
 // LVGL display buffer — partial mode, 10 scanlines × 2 bytes/pixel (RGB565).
 // Important: lv_color_t in LVGL 9 is a 3-byte {r,g,b} struct (sizeof=3), NOT a
@@ -48,6 +49,87 @@ static ui_pager::Pager g_pager;
 static rotate::State g_rotate;
 static data::PayloadState g_state{};
 
+// Idle-dimming + auto-rotate-hint state. last_activity_ms is touched by any
+// interaction (swipe, button, touch). After IDLE_DIM_MS without activity the
+// LCD backlight drops from FULL to DIM; any activity restores immediately.
+static uint32_t g_last_activity_ms = 0;
+static bool g_dimmed = false;
+constexpr uint32_t IDLE_DIM_MS = 30000;     // 30s
+constexpr uint8_t BACKLIGHT_FULL = 200;     // ~80% — comfortable indoors
+constexpr uint8_t BACKLIGHT_DIM = 40;       // ~16% — visible but discreet
+
+// Auto-rotate countdown widgets (live on lv_scr_act() so they persist across
+// pager swaps). A 320x2 thin bar at y=238 drains from full width to 0 over
+// PAGE_SWAP_INTERVAL, then resets when the pager swaps.
+static lv_obj_t* g_rotate_hint = nullptr;
+static uint32_t g_last_page_swap_ms = 0;
+constexpr uint32_t PAGE_SWAP_INTERVAL_MS = 10000;
+
+// Battery-detail overlay (held BtnB shows it for ~1.5s). Lives on lv_scr_act
+// foreground; rendered as a translucent card with voltage + charging state.
+static lv_obj_t* g_battery_overlay = nullptr;
+static lv_obj_t* g_battery_overlay_lbl = nullptr;
+static uint32_t g_battery_overlay_hide_at_ms = 0;
+
+void mark_activity() {
+    g_last_activity_ms = millis();
+    if (g_dimmed) {
+        M5.Display.setBrightness(BACKLIGHT_FULL);
+        g_dimmed = false;
+    }
+}
+
+void build_rotate_hint() {
+    g_rotate_hint = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(g_rotate_hint, 320, 2);
+    lv_obj_set_pos(g_rotate_hint, 0, 238);
+    lv_obj_set_style_radius(g_rotate_hint, 0, 0);
+    lv_obj_set_style_border_width(g_rotate_hint, 0, 0);
+    lv_obj_set_style_bg_color(g_rotate_hint, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_obj_set_style_bg_opa(g_rotate_hint, LV_OPA_50, 0);
+    lv_obj_clear_flag(g_rotate_hint, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+void build_battery_overlay() {
+    g_battery_overlay = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(g_battery_overlay, 200, 80);
+    lv_obj_center(g_battery_overlay);
+    lv_obj_set_style_radius(g_battery_overlay, 12, 0);
+    lv_obj_set_style_bg_color(g_battery_overlay, lv_color_hex(0x111111), 0);
+    lv_obj_set_style_bg_opa(g_battery_overlay, LV_OPA_90, 0);
+    lv_obj_set_style_border_width(g_battery_overlay, 1, 0);
+    lv_obj_set_style_border_color(g_battery_overlay, lv_color_hex(theme::CLAUDE_ACCENT), 0);
+    lv_obj_set_style_pad_all(g_battery_overlay, 8, 0);
+    lv_obj_clear_flag(g_battery_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_battery_overlay, LV_OBJ_FLAG_HIDDEN);
+
+    g_battery_overlay_lbl = lv_label_create(g_battery_overlay);
+    lv_obj_set_style_text_color(g_battery_overlay_lbl, lv_color_hex(theme::TEXT_PRIMARY), 0);
+    lv_obj_set_style_text_font(g_battery_overlay_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_center(g_battery_overlay_lbl);
+    lv_label_set_text(g_battery_overlay_lbl, "");
+}
+
+void show_battery_overlay() {
+    if (!g_battery_overlay || !g_battery_overlay_lbl) return;
+    int level = M5.Power.getBatteryLevel();
+    int voltage_mv = M5.Power.getBatteryVoltage();  // mV
+    bool charging = M5.Power.isCharging();
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%d%%   %.2fV\n%s",
+                  level, voltage_mv / 1000.0,
+                  charging ? "charging" : "on battery");
+    lv_label_set_text(g_battery_overlay_lbl, buf);
+    lv_obj_clear_flag(g_battery_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_battery_overlay);
+    g_battery_overlay_hide_at_ms = millis() + 1500;
+}
+
+void hide_battery_overlay() {
+    if (!g_battery_overlay) return;
+    lv_obj_add_flag(g_battery_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
 // Hand-rolled swipe detector. LVGL 9's gesture engine needs many polled
 // samples per second to detect motion; with our 50ms loop the sampling is
 // too sparse. Track touch start/end ourselves and fire on_swipe_left/right
@@ -81,6 +163,7 @@ void poll_swipe() {
             g_touch_active = true;
             g_touch_start_x = tx;
             g_touch_start_y = ty;
+            mark_activity();  // any finger contact wakes the dimmed screen
         }
         g_touch_last_x = tx;
         g_touch_last_y = ty;
@@ -92,13 +175,12 @@ void poll_swipe() {
         int16_t adx = dx < 0 ? -dx : dx;
         int16_t ady = dy < 0 ? -dy : dy;
         if (adx >= SWIPE_THRESHOLD_PX && ady <= SWIPE_VERTICAL_LIMIT_PX) {
-            Serial.printf("[swipe] FIRED %s (dx=%d dy=%d)\n",
-                          dx < 0 ? "LEFT" : "RIGHT", dx, dy);
             if (dx < 0) {
                 ui_pager::on_swipe_left(g_pager);
             } else {
                 ui_pager::on_swipe_right(g_pager);
             }
+            g_last_page_swap_ms = millis();  // reset auto-rotate timer too
         }
     }
 }
@@ -234,7 +316,14 @@ void setup() {
     lv_obj_add_event_cb(g_meter.codex_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     splash::init(lv_scr_act());
+    build_rotate_hint();
+    build_battery_overlay();
     rotate::reset(g_rotate, millis());
+
+    // Idle dim init: start at full brightness; loop tracks last activity.
+    M5.Display.setBrightness(BACKLIGHT_FULL);
+    g_last_activity_ms = millis();
+    g_last_page_swap_ms = millis();
 
     // Stub state for visual verification before first BLE payload arrives.
     g_state.claude = { 71, 134, 38, 6240, "allow", true };
@@ -260,19 +349,29 @@ void loop() {
     poll_swipe();  // own swipe detector — LVGL gestures unreliable at 50ms cadence
     buttons::tick(g_state.focus.agent);
 
-    // Bezel BtnA/BtnC are the primary swipe surface — this device's touch
-    // panel is firmware-locked and never reports finger contacts. BtnB still
-    // toggles splash. Auto-rotate stays as a tertiary fallback.
+    uint32_t now = millis();
+
+    // Bezel BtnA/BtnC swipe + long-press BtnB battery detail.
     int swipe_intent = buttons::consume_swipe_intent();
     if (swipe_intent < 0) {
-        Serial.println("[btn] BtnA -> swipe left");
         ui_pager::on_swipe_left(g_pager);
+        g_last_page_swap_ms = now;
+        mark_activity();
     } else if (swipe_intent > 0) {
-        Serial.println("[btn] BtnC -> swipe right");
         ui_pager::on_swipe_right(g_pager);
+        g_last_page_swap_ms = now;
+        mark_activity();
     }
 
-    if (buttons::consume_splash_toggle()) {
+    // BtnB: short tap toggles splash, long-press (>800ms) shows battery
+    // detail overlay. consume_splash_toggle returns true on release (short
+    // tap pattern); pressedFor(800) catches the held-down state.
+    if (M5.BtnB.pressedFor(800)) {
+        show_battery_overlay();
+        // Drain the "toggle on release" flag so the splash doesn't also fire.
+        (void)buttons::consume_splash_toggle();
+        mark_activity();
+    } else if (buttons::consume_splash_toggle()) {
         if (splash::is_visible()) {
             splash::hide();
         } else {
@@ -280,7 +379,15 @@ void loop() {
                 (ui_pager::current(g_pager) == ui_pager::Page::Codex);
             splash::show(on_codex);
         }
+        mark_activity();
     }
+
+    // Battery overlay auto-hide.
+    if (g_battery_overlay_hide_at_ms != 0 && now >= g_battery_overlay_hide_at_ms) {
+        hide_battery_overlay();
+        g_battery_overlay_hide_at_ms = 0;
+    }
+
     lv_tick_inc(50);
     lv_timer_handler();
 
@@ -289,13 +396,26 @@ void loop() {
     bool show_7d = (rotate::current(g_rotate, millis()) == rotate::Frame::SevenDay);
     ui_meter::refresh(g_meter, g_state, show_7d);
 
-    // Pager auto-rotation: cycle Claude <-> Codex every 10s.
-    static uint32_t last_page_swap = 0;
-    constexpr uint32_t PAGE_SWAP_INTERVAL = 10000;  // ms
-    uint32_t now = millis();
-    if (now - last_page_swap > PAGE_SWAP_INTERVAL) {
+    // Auto-rotate countdown: thin bar drains over PAGE_SWAP_INTERVAL_MS.
+    // Width = 320 * (1 - elapsed/total); when elapsed reaches total, swap
+    // page and reset the timer.
+    uint32_t elapsed = now - g_last_page_swap_ms;
+    if (elapsed >= PAGE_SWAP_INTERVAL_MS) {
         ui_pager::on_swipe_left(g_pager);
-        last_page_swap = now;
+        g_last_page_swap_ms = now;
+        elapsed = 0;
+    }
+    if (g_rotate_hint) {
+        int32_t hint_w = 320 - (int32_t)(320 * elapsed / PAGE_SWAP_INTERVAL_MS);
+        if (hint_w < 0) hint_w = 0;
+        lv_obj_set_width(g_rotate_hint, hint_w);
+    }
+
+    // Idle dim: drop backlight after IDLE_DIM_MS without activity. Touch
+    // input via the swipe detector marks activity on press; buttons too.
+    if (!g_dimmed && (now - g_last_activity_ms) > IDLE_DIM_MS) {
+        M5.Display.setBrightness(BACKLIGHT_DIM);
+        g_dimmed = true;
     }
 
     delay(50);
