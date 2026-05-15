@@ -36,6 +36,7 @@ log = logging.getLogger("clawdmeter.main")
 
 CLAUDE_CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
+CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 SUPERSET_STATE_PATH = Path.home() / ".superset" / "app-state.json"
 
 
@@ -117,6 +118,7 @@ class Orchestrator:
         self._stopped = asyncio.Event()
         self._codex_dirty = asyncio.Event()  # fsevents-driven; see _codex_watcher_loop
         self._codex_observer = None  # watchdog Observer (or None if unavailable)
+        self._claude_observer = None  # watchdog Observer for ~/.claude/projects
 
     def _on_connected(self) -> None:
         # Flush current state to the freshly-connected device. Writes attempted
@@ -284,6 +286,63 @@ class Orchestrator:
             except Exception:
                 pass
 
+    async def _claude_fs_watcher_loop(self) -> None:
+        """Real-time Claude updates via FSEvents on ~/.claude/projects.
+
+        Symmetric to the Codex watcher. Claude Code appends a JSONL row to
+        `~/.claude/projects/<uuid>/conversation-*.jsonl` after every turn —
+        any modify event in that tree is a strong signal that a Claude API
+        round-trip just completed and the rate-limit headers have shifted.
+
+        Instead of running our own probe loop, we just fire self._refresh.set()
+        which wakes the existing _claude_loop's wait_for() and forces an
+        immediate poll of all pool accounts. Reuses the BLE-REQ refresh path.
+
+        Debounce 300ms to collapse the burst of writes during a single turn
+        (Claude Code rewrites the same JSONL file multiple times per turn).
+        """
+        if not _HAS_WATCHDOG:
+            return
+        if not CLAUDE_PROJECTS_DIR.exists():
+            log.info("claude projects dir %s missing; fsevents watcher disabled",
+                     CLAUDE_PROJECTS_DIR)
+            return
+
+        loop = asyncio.get_running_loop()
+        wake = asyncio.Event()
+
+        class _Handler(FileSystemEventHandler):  # type: ignore[misc]
+            def on_modified(self, event):
+                loop.call_soon_threadsafe(wake.set)
+            on_created = on_modified
+
+        self._claude_observer = Observer()
+        # recursive=True: each project has its own subdir with conversation JSONL.
+        self._claude_observer.schedule(_Handler(), str(CLAUDE_PROJECTS_DIR),
+                                        recursive=True)
+        self._claude_observer.start()
+        log.info("claude fsevents watcher armed on %s", CLAUDE_PROJECTS_DIR)
+
+        try:
+            while not self._stopped.is_set():
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    continue
+                wake.clear()
+                # Debounce: a single Claude turn rewrites the JSONL ~5 times
+                # in quick succession. 300ms collapses the burst.
+                await asyncio.sleep(0.3)
+                wake.clear()
+                log.info("claude fsevents -> forcing immediate probe")
+                self._refresh.set()
+        finally:
+            try:
+                self._claude_observer.stop()
+                self._claude_observer.join(timeout=2.0)
+            except Exception:
+                pass
+
     async def _superset_loop(self) -> None:
         while not self._stopped.is_set():
             # Read FIRST, then sleep — keeps tests deterministic at small intervals.
@@ -322,6 +381,7 @@ class Orchestrator:
             self._superset_loop(),
             self._writer_loop(),
             self._codex_watcher_loop(),
+            self._claude_fs_watcher_loop(),
             self.writer.run(),
             return_exceptions=True,
         )
