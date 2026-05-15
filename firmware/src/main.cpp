@@ -12,6 +12,7 @@
 #include "ble_hid.h"
 #include "buttons.h"
 #include "splash.h"
+#include "touch_driver.h"
 
 // LVGL display buffer — partial mode, 10 scanlines × 2 bytes/pixel (RGB565).
 // Important: lv_color_t in LVGL 9 is a 3-byte {r,g,b} struct (sizeof=3), NOT a
@@ -61,54 +62,20 @@ int16_t g_touch_last_x = -1;
 int16_t g_touch_last_y = -1;
 bool g_touch_active = false;
 
-// Direct FT6x36 register dump for diagnostic. Reads registers 0x00..0x0F
-// from address 0x38 on Wire1 and emits any nonzero finger-event registers.
-// Runs at ~10Hz to keep serial output readable. When the user touches the
-// screen, if even register 0x02 (touch count) flips to a nonzero, we know
-// the chip senses contact and we're misreading via M5.Touch.
-static void touch_register_probe() {
-    static uint32_t last = 0;
-    uint32_t now = millis();
-    if (now - last < 100) return;
-    last = now;
-
-    uint8_t buf[16] = {0};
-    Wire1.beginTransmission(0x38);
-    Wire1.write(uint8_t(0x00));
-    if (Wire1.endTransmission(false) != 0) return;
-    Wire1.requestFrom((uint8_t)0x38, (uint8_t)16);
-    size_t got = 0;
-    while (Wire1.available() && got < sizeof(buf)) buf[got++] = Wire1.read();
-    if (got < 7) return;
-    // 0x02 = TD_STATUS (number of touch points)
-    // 0x03 = P1_XH (event flag + xH)
-    uint8_t td = buf[0x02];
-    if (td != 0 || buf[0x03] != 0 || buf[0x04] != 0) {
-        Serial.printf("[reg] td=%u P1 xH=%02X xL=%02X yH=%02X yL=%02X w=%02X misc=%02X\n",
-                      td, buf[0x03], buf[0x04], buf[0x05], buf[0x06], buf[0x07], buf[0x08]);
-    }
-}
-
+// Poll the FT6x36 touch driver and detect horizontal swipes.
+//
+// Why a hand-rolled detector instead of LVGL gestures? Two reasons:
+// 1. LVGL 9's gesture engine needs many polled samples per second to detect
+//    motion; our 50ms loop gives ~20Hz which is below its threshold.
+// 2. M5Unified's M5.Touch was racing our diagnostic raw-I2C reads on the
+//    same bus and consistently returning count=0 — we proved this with
+//    169 [reg] events vs 0 [count>0] heartbeats in the same window. We
+//    bypass M5.Touch entirely and own the FT6x36 polling via touch_driver.
 void poll_swipe() {
-    touch_register_probe();
-    M5.Touch.update(millis());  // force a fresh read
-    int touch_count = M5.Touch.getCount();
-    auto t = M5.Touch.getDetail();
-    bool pressed = touch_count > 0;
-    int16_t tx = t.x;
-    int16_t ty = t.y;
+    bool pressed = touch::update();
+    int16_t tx = touch::x();
+    int16_t ty = touch::y();
 
-    static uint32_t dbg_heartbeat = 0;
-    if (millis() - dbg_heartbeat > 2000) {
-        Serial.printf("[touch-heartbeat] count=%d pressed=%d x=%d y=%d state=%d wasReleased=%d\n",
-                      touch_count, pressed, tx, ty, (int)t.state, (int)t.wasReleased());
-        dbg_heartbeat = millis();
-    }
-    static bool dbg_last_pressed = false;
-    if (pressed != dbg_last_pressed) {
-        Serial.printf("[touch] state=%s x=%d y=%d\n", pressed ? "PRESSED" : "RELEASED", tx, ty);
-        dbg_last_pressed = pressed;
-    }
     if (pressed) {
         if (!g_touch_active) {
             g_touch_active = true;
@@ -122,20 +89,16 @@ void poll_swipe() {
         if (g_touch_start_x < 0 || g_touch_last_x < 0) return;
         int16_t dx = g_touch_last_x - g_touch_start_x;
         int16_t dy = g_touch_last_y - g_touch_start_y;
-        Serial.printf("[swipe] start=(%d,%d) end=(%d,%d) dx=%d dy=%d\n",
-                      g_touch_start_x, g_touch_start_y, g_touch_last_x, g_touch_last_y, dx, dy);
         int16_t adx = dx < 0 ? -dx : dx;
         int16_t ady = dy < 0 ? -dy : dy;
         if (adx >= SWIPE_THRESHOLD_PX && ady <= SWIPE_VERTICAL_LIMIT_PX) {
-            Serial.printf("[swipe] FIRED %s\n", dx < 0 ? "LEFT" : "RIGHT");
+            Serial.printf("[swipe] FIRED %s (dx=%d dy=%d)\n",
+                          dx < 0 ? "LEFT" : "RIGHT", dx, dy);
             if (dx < 0) {
                 ui_pager::on_swipe_left(g_pager);
             } else {
                 ui_pager::on_swipe_right(g_pager);
             }
-        } else {
-            Serial.printf("[swipe] rejected (adx=%d need>=%d, ady=%d need<=%d)\n",
-                          adx, SWIPE_THRESHOLD_PX, ady, SWIPE_VERTICAL_LIMIT_PX);
         }
     }
 }
