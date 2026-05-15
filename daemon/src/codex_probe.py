@@ -36,7 +36,13 @@ from pathlib import Path
 log = logging.getLogger("clawdmeter.codex")
 
 CODEX_LOG_PATH = Path.home() / ".codex" / "logs_2.sqlite"
-DEFAULT_FRESHNESS_SECONDS = 24 * 3600  # 24h
+# Codex CLI emits `codex.rate_limits` events on session start and certain
+# turns — not every turn. After the user goes idle, new rows stop arriving.
+# 1h is a deliberate honesty window: if Codex CLI hasn't told us the live
+# numbers within the last hour, we'd rather show "--" than 17h-stale data
+# the user mistakes for live. Reset by any new Codex activity (writes a
+# fresh row); fsevents picks it up within ~200ms.
+DEFAULT_FRESHNESS_SECONDS = 3600  # 1h
 
 
 _RATE_LIMIT_ANCHOR = '{"type":"codex.rate_limits"'
@@ -102,10 +108,13 @@ def probe_codex(now_epoch: int | None = None,
         log.debug("codex log not found at %s", CODEX_LOG_PATH)
         return unavailable
 
-    # Open read-only; URI form prevents lock acquisition.
-    uri = f"file:{CODEX_LOG_PATH}?mode=ro"
+    # Open read-write with PRAGMA query_only — read-only (mode=ro) silently
+    # misses WAL pages on macOS, and Codex CLI uses WAL journaling. Without
+    # this we see only the committed snapshot, which can lag by HOURS when
+    # rate_limit events are sparse (they're not emitted every turn).
     try:
-        conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+        conn = sqlite3.connect(str(CODEX_LOG_PATH), timeout=2.0)
+        conn.execute("PRAGMA query_only=1")
     except sqlite3.OperationalError as e:
         log.warning("codex log open failed: %s", e)
         return unavailable
