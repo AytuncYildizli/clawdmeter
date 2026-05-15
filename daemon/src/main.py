@@ -119,6 +119,12 @@ class Orchestrator:
         self._codex_dirty = asyncio.Event()  # fsevents-driven; see _codex_watcher_loop
         self._codex_observer = None  # watchdog Observer (or None if unavailable)
         self._claude_observer = None  # watchdog Observer for ~/.claude/projects
+        # Sticky last-known-good for Codex: Codex CLI emits rate_limits events
+        # rarely, so the SQLite tail can go stale within an hour even during
+        # active use. Claude has no symmetric issue because it queries a live
+        # API. We track the wall-clock when codex last produced a fresh block
+        # so we can hold the value on screen across stale-probe windows.
+        self._codex_last_fresh_epoch: int = 0
 
     def _on_connected(self) -> None:
         # Flush current state to the freshly-connected device. Writes attempted
@@ -190,7 +196,7 @@ class Orchestrator:
                              active_block.get("s"), active_block.get("w"))
                     self.state.update_claude(active_block)
                 self.state.update_claude_accounts(wire_rows)
-                self.state.update_codex(probe_codex())
+                self._apply_codex_sticky(probe_codex())
                 self._dirty.set()
             # Wait for next interval OR a refresh request
             try:
@@ -198,6 +204,41 @@ class Orchestrator:
                 self._refresh.clear()
             except asyncio.TimeoutError:
                 pass
+
+    # Sticky update: hold the last-known-good Codex block on screen even
+    # when subsequent probes return stale (ok=False). Without this the
+    # display flips to '--' the moment freshness window expires, then
+    # back to a real value on the next Codex turn — flicker. Behavior:
+    #   - Fresh block (ok=True): adopt it, mark wall-clock.
+    #   - Stale block (ok=False) AND we already have ok=True state: KEEP
+    #     the prior value, do NOT push '--' to the device.
+    #   - Stale AND state is also empty: pass through (initial state, or
+    #     ' been-stale-for-24h' kill switch below).
+    #   - Stale AND last-fresh was >24h ago: admit defeat, push '--'.
+    CODEX_STICKY_LIMIT_SEC = 24 * 3600  # after this long, give up and show '--'
+
+    def _apply_codex_sticky(self, new_block: dict) -> None:
+        import time as _t
+        now = int(_t.time())
+        if new_block.get("ok"):
+            self.state.update_codex(new_block)
+            self._codex_last_fresh_epoch = now
+            return
+        prev = self.state.codex
+        if not prev.get("ok"):
+            # We don't have fresh data and never did (or kill-switch fired).
+            self.state.update_codex(new_block)
+            return
+        if (self._codex_last_fresh_epoch
+                and now - self._codex_last_fresh_epoch
+                > self.CODEX_STICKY_LIMIT_SEC):
+            log.info("codex sticky kill-switch fired (>24h since last fresh)")
+            self.state.update_codex(new_block)
+            self._codex_last_fresh_epoch = 0
+            return
+        # Hold the line: keep prev value on screen.
+        log.debug("codex stale, holding last-known: s=%s w=%s",
+                  prev.get("s"), prev.get("w"))
 
     async def _codex_watcher_loop(self) -> None:
         """Real-time Codex updates via FSEvents.
@@ -258,25 +299,16 @@ class Orchestrator:
                 self._codex_dirty.clear()
                 try:
                     block = probe_codex()
-                    if block.get("ok"):
-                        # Only push when something actually changed. Codex CLI
-                        # writes many non-rate-limit log rows; the SQLite file
-                        # mtime ticks on each one. Probing every time is fine
-                        # (cheap), but pushing 487B over BLE every second is
-                        # waste. Compare to the last-pushed block.
-                        prev = self.state.codex
-                        changed = (
-                            block.get("s") != prev.get("s")
-                            or block.get("w") != prev.get("w")
-                            or block.get("sr") != prev.get("sr")
-                            or block.get("wr") != prev.get("wr")
-                            or block.get("ok") != prev.get("ok")
-                        )
-                        if changed:
-                            log.info("codex fsevents probe (changed): s=%s%% w=%s%%",
-                                     block.get("s"), block.get("w"))
-                            self.state.update_codex(block)
-                            self._dirty.set()
+                    # Sticky-aware: only push on change AND when new is fresh,
+                    # OR when sticky kill-switch fires (handled inside helper).
+                    prev = self.state.codex
+                    prev_snapshot = {k: prev.get(k) for k in ("s","w","sr","wr","ok")}
+                    self._apply_codex_sticky(block)
+                    new_snapshot = {k: self.state.codex.get(k) for k in ("s","w","sr","wr","ok")}
+                    if new_snapshot != prev_snapshot:
+                        log.info("codex fsevents probe (changed): s=%s%% w=%s%% ok=%s",
+                                 new_snapshot["s"], new_snapshot["w"], new_snapshot["ok"])
+                        self._dirty.set()
                 except Exception as e:
                     log.warning("codex fsevents probe failed: %s", e)
         finally:
