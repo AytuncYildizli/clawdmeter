@@ -88,32 +88,25 @@ Page next_page(Page current, int dir) {
 
 }  // namespace
 
-void init(Pager& p, lv_obj_t* claude_screen, lv_obj_t* codex_screen,
-          lv_obj_t* activity_screen) {
+void init(Pager& p, lv_obj_t* claude_screen, lv_obj_t* codex_screen) {
     p.screens[0] = claude_screen;
     p.screens[1] = codex_screen;
-    p.screens[2] = activity_screen;
     show_only_immediate(p, Page::Claude);
 }
 
 void on_swipe_left(Pager& p) {
-    // Forward cycle (claude -> codex -> activity -> claude).
     slide_to(p, next_page(p.current, -1), -1);
 }
 
 void on_swipe_right(Pager& p) {
-    // Reverse cycle.
     slide_to(p, next_page(p.current, +1), +1);
 }
 
 Page current(const Pager& p) { return p.current; }
 
 data::AgentKind current_agent(const Pager& p) {
-    switch (p.current) {
-        case Page::Claude: return data::AgentKind::Claude;
-        case Page::Codex:  return data::AgentKind::Codex;
-        default:           return data::AgentKind::None;
-    }
+    return p.current == Page::Claude ? data::AgentKind::Claude
+                                     : data::AgentKind::Codex;
 }
 
 }  // namespace ui_pager

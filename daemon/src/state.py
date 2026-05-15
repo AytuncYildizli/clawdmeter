@@ -13,12 +13,9 @@ from .superset_state import FocusInfo
 _CLAUDE_DEFAULT = {"s": 0, "sr": 0, "w": 0, "wr": 0, "st": "unknown", "ok": False}
 _CODEX_DEFAULT = {"s": 0, "sr": 0, "w": 0, "wr": 0, "st": "unavailable", "ok": False}
 _FOCUS_DEFAULT = FocusInfo(agent="none", repo="", sessions=0)
-# Per-account row in the multi-account pool. "n" = short label (<= 8 chars),
-# "s"/"w" = used percent for 5h/7d, "ok"=False on stale/expired, "a"=is_active.
-# Firmware reads up to 3 entries.
-# Wire cap on accounts in the BLE payload. With chunked-write protocol, the
-# 512B-per-write ceiling no longer constrains us. 3 is the active +
-# 2 top backups (sorted by last_seen in account_pool.list_accounts).
+# Wire cap on accounts in the BLE payload. Chunked-write protocol removed
+# the 512B ceiling, so 3 (active + 2 backups) is a UX choice, not a budget
+# constraint. Firmware renders all of them on the active page.
 _MAX_ACCOUNTS_ON_WIRE = 3
 
 
@@ -28,7 +25,6 @@ class State:
     codex: dict = field(default_factory=lambda: dict(_CODEX_DEFAULT))
     focus: FocusInfo = field(default_factory=lambda: _FOCUS_DEFAULT)
     claude_accounts: list = field(default_factory=list)
-    activity_events: list = field(default_factory=list)
 
     def update_claude(self, block: dict) -> None:
         self.claude = dict(block)
@@ -41,13 +37,8 @@ class State:
 
     def update_claude_accounts(self, accounts: list[dict]) -> None:
         """Set the per-account roll-up. Each entry: {n, s, sr, w, wr, ok, a}.
-        Truncated to _MAX_ACCOUNTS_ON_WIRE to bound BLE payload size."""
+        Truncated to _MAX_ACCOUNTS_ON_WIRE to bound the BLE payload."""
         self.claude_accounts = [dict(a) for a in accounts[:_MAX_ACCOUNTS_ON_WIRE]]
-
-    def update_activity_events(self, events: list[dict]) -> None:
-        """Set the multi-session activity feed. Each entry: {t, v, a, r}.
-        Newest-first. Bounded by ActivityTracker.MAX_EVENTS."""
-        self.activity_events = [dict(e) for e in events]
 
     def to_payload(self) -> dict:
         return {
@@ -55,5 +46,4 @@ class State:
             "codex": dict(self.codex),
             "focus": self.focus.to_dict(),
             "claude_accounts": [dict(a) for a in self.claude_accounts],
-            "activity_events": [dict(e) for e in self.activity_events],
         }

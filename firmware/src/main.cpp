@@ -13,7 +13,6 @@
 #include "buttons.h"
 #include "splash.h"
 #include "touch_driver.h"
-#include "ui_activity.h"
 
 // LVGL display buffer — partial mode, 10 scanlines × 2 bytes/pixel (RGB565).
 // Important: lv_color_t in LVGL 9 is a 3-byte {r,g,b} struct (sizeof=3), NOT a
@@ -224,15 +223,12 @@ void setup() {
     lv_indev_set_read_cb(indev, touch_read_cb);
 
     g_meter = ui_meter::build(lv_scr_act());
-    lv_obj_t* activity_screen = ui_activity::build(lv_scr_act());
-    ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen,
-                    activity_screen);
+    ui_pager::init(g_pager, g_meter.claude_screen, g_meter.codex_screen);
     // Register gesture handler on each pager screen — events don't bubble from
     // child widgets to lv_scr_act() automatically; the screen widgets themselves
     // own the touch area, so we attach there.
     lv_obj_add_event_cb(g_meter.claude_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_add_event_cb(g_meter.codex_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
-    lv_obj_add_event_cb(activity_screen, screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_add_event_cb(lv_scr_act(), screen_gesture_cb, LV_EVENT_GESTURE, nullptr);
     splash::init(lv_scr_act());
     rotate::reset(g_rotate, millis());
@@ -289,7 +285,6 @@ void loop() {
 
     bool show_7d = (rotate::current(g_rotate, millis()) == rotate::Frame::SevenDay);
     ui_meter::refresh(g_meter, g_state, show_7d);
-    ui_activity::refresh(g_state);
 
     // Pager auto-rotation: cycle Claude <-> Codex every 10s.
     static uint32_t last_page_swap = 0;

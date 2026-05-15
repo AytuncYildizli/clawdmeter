@@ -62,24 +62,6 @@ bool parse_payload(const char* json, size_t len, data::PayloadState& out) {
         }
     }
 
-    // Activity feed — read up to MAX_ACTIVITY_EVENTS entries (newest-first).
-    // Wire shape: {t: epoch, v: "+/-/>/=", a: "c/x/n", r: "repo"}
-    out.activity_event_count = 0;
-    auto events_arr = doc["activity_events"].as<JsonArrayConst>();
-    if (!events_arr.isNull()) {
-        for (JsonObjectConst row : events_arr) {
-            if (out.activity_event_count >= data::MAX_ACTIVITY_EVENTS) break;
-            auto& slot = out.activity_events[out.activity_event_count];
-            slot.ts_epoch = row["t"] | 0u;
-            const char* v = row["v"] | " ";
-            slot.verb = v[0];  // single-char verb
-            const char* a = row["a"] | "n";
-            slot.agent = a[0];
-            copy_safe(slot.repo, sizeof(slot.repo), row["r"] | "");
-            out.activity_event_count++;
-        }
-    }
-
     out.initialized = true;
     return true;
 }
