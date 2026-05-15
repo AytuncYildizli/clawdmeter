@@ -18,8 +18,17 @@ from pathlib import Path
 from .ble_writer import BleWriter
 from .claude_probe import probe_claude
 from .codex_stub import codex_stub
-from .codex_probe import probe_codex
+from .codex_probe import probe_codex, CODEX_LOG_PATH
 from .account_pool import AccountPool, Account
+
+try:
+    from watchdog.observers import Observer  # type: ignore
+    from watchdog.events import FileSystemEventHandler  # type: ignore
+    _HAS_WATCHDOG = True
+except ImportError:
+    Observer = None  # type: ignore
+    FileSystemEventHandler = object  # type: ignore
+    _HAS_WATCHDOG = False
 from .superset_state import read_focus, FocusInfo
 from .state import State
 
@@ -106,6 +115,8 @@ class Orchestrator:
         self._dirty = asyncio.Event()
         self._refresh = asyncio.Event()
         self._stopped = asyncio.Event()
+        self._codex_dirty = asyncio.Event()  # fsevents-driven; see _codex_watcher_loop
+        self._codex_observer = None  # watchdog Observer (or None if unavailable)
 
     def _on_connected(self) -> None:
         # Flush current state to the freshly-connected device. Writes attempted
@@ -186,6 +197,93 @@ class Orchestrator:
             except asyncio.TimeoutError:
                 pass
 
+    async def _codex_watcher_loop(self) -> None:
+        """Real-time Codex updates via FSEvents.
+
+        Every Codex CLI websocket turn appends a row to ~/.codex/logs_2.sqlite.
+        Polling at 60s would lag a Codex prompt's rate-limit update by up to
+        59 seconds; watchdog gives us file-change notification in ~100ms.
+
+        Watchdog's Observer runs on a background thread — to wake this asyncio
+        coroutine safely we route the modify event through
+        loop.call_soon_threadsafe(self._codex_dirty.set), then debounce 200ms
+        (SQLite writes typically arrive as 2-3 close-spaced events per turn:
+        a journal write + the actual commit). After the debounce we re-probe
+        and push the result through the same _dirty path as the 60s poller.
+        """
+        if not _HAS_WATCHDOG:
+            log.info("watchdog not available; Codex updates run at 60s cadence only")
+            return
+        if not CODEX_LOG_PATH.exists():
+            log.info("codex log %s missing; fsevents watcher disabled", CODEX_LOG_PATH)
+            return
+
+        loop = asyncio.get_running_loop()
+
+        class _Handler(FileSystemEventHandler):  # type: ignore[misc]
+            def __init__(self, set_dirty):
+                self._set_dirty = set_dirty
+            def on_modified(self, event):
+                # SQLite rotates between -journal/-wal files alongside the .sqlite —
+                # any of them firing is a sign of new activity.
+                self._set_dirty()
+            on_created = on_modified
+
+        def _trigger():
+            # Called from watchdog's thread; bounce onto the asyncio loop.
+            loop.call_soon_threadsafe(self._codex_dirty.set)
+
+        handler = _Handler(_trigger)
+        self._codex_observer = Observer()
+        # Watch the directory (not the file) — SQLite writes go to companion
+        # files (-journal, -wal, -shm) and atomic-rename swaps; watching the
+        # parent dir catches them all.
+        self._codex_observer.schedule(handler, str(CODEX_LOG_PATH.parent),
+                                       recursive=False)
+        self._codex_observer.start()
+        log.info("codex fsevents watcher armed on %s", CODEX_LOG_PATH.parent)
+
+        try:
+            while not self._stopped.is_set():
+                try:
+                    await asyncio.wait_for(self._codex_dirty.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    continue
+                self._codex_dirty.clear()
+                # Debounce: SQLite typically writes the journal then commits;
+                # waiting 200ms collapses ~3 events into one probe.
+                await asyncio.sleep(0.2)
+                self._codex_dirty.clear()
+                try:
+                    block = probe_codex()
+                    if block.get("ok"):
+                        # Only push when something actually changed. Codex CLI
+                        # writes many non-rate-limit log rows; the SQLite file
+                        # mtime ticks on each one. Probing every time is fine
+                        # (cheap), but pushing 487B over BLE every second is
+                        # waste. Compare to the last-pushed block.
+                        prev = self.state.codex
+                        changed = (
+                            block.get("s") != prev.get("s")
+                            or block.get("w") != prev.get("w")
+                            or block.get("sr") != prev.get("sr")
+                            or block.get("wr") != prev.get("wr")
+                            or block.get("ok") != prev.get("ok")
+                        )
+                        if changed:
+                            log.info("codex fsevents probe (changed): s=%s%% w=%s%%",
+                                     block.get("s"), block.get("w"))
+                            self.state.update_codex(block)
+                            self._dirty.set()
+                except Exception as e:
+                    log.warning("codex fsevents probe failed: %s", e)
+        finally:
+            try:
+                self._codex_observer.stop()
+                self._codex_observer.join(timeout=2.0)
+            except Exception:
+                pass
+
     async def _superset_loop(self) -> None:
         while not self._stopped.is_set():
             # Read FIRST, then sleep — keeps tests deterministic at small intervals.
@@ -223,6 +321,7 @@ class Orchestrator:
             self._claude_loop(),
             self._superset_loop(),
             self._writer_loop(),
+            self._codex_watcher_loop(),
             self.writer.run(),
             return_exceptions=True,
         )

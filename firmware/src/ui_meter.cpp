@@ -311,10 +311,21 @@ void refresh_one(ScreenWidgets& w, const data::PayloadState& state,
         lv_bar_set_value(w.progress_bar, 0, LV_ANIM_OFF);
     }
 
-    // Reset countdown = weekly reset. Weekly resets are days away — format as
-    // "Xd Yh" when over 24h, "Xh Ym" otherwise.
+    // Reset countdown = weekly reset, ticking down locally between probes.
+    // The daemon ships `wr` = minutes-until-reset at probe time. We subtract
+    // the elapsed time since the payload arrived so the display advances by
+    // the minute even without a fresh probe (feels real-time).
+    //   effective_mins = wr - (millis() - last_payload_millis) / 60000
+    // When effective_mins <= 0, the next probe will refresh wr; clamp to 0
+    // until then so we never display negatives.
     if (block.ok) {
         int mins = block.wr;
+        if (last_payload_millis != 0) {
+            uint32_t elapsed_ms = millis() - last_payload_millis;
+            int elapsed_mins = static_cast<int>(elapsed_ms / 60000U);
+            mins -= elapsed_mins;
+            if (mins < 0) mins = 0;
+        }
         if (mins >= 24 * 60) {
             int days = mins / (24 * 60);
             int hours = (mins % (24 * 60)) / 60;
