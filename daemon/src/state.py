@@ -16,7 +16,10 @@ _FOCUS_DEFAULT = FocusInfo(agent="none", repo="", sessions=0)
 # Per-account row in the multi-account pool. "n" = short label (<= 8 chars),
 # "s"/"w" = used percent for 5h/7d, "ok"=False on stale/expired, "a"=is_active.
 # Firmware reads up to 3 entries.
-_MAX_ACCOUNTS_ON_WIRE = 3
+# Wire cap on accounts in the BLE payload. NimBLE characteristic limit is
+# 512B and our active+codex+focus base is ~200B; each account row is ~95B.
+# 2 accounts (active + best backup) leaves room for activity_events.
+_MAX_ACCOUNTS_ON_WIRE = 2
 
 
 @dataclass

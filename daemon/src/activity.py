@@ -35,7 +35,14 @@ VERB_REMOVED = "-"
 VERB_STARTED = ">"
 VERB_STOPPED = "="
 
-MAX_EVENTS = 8
+# Cap on events shipped over BLE. The Bluetooth Core Spec hard-limits a
+# single GATT characteristic value to 512 bytes (BLE_ATT_ATTR_MAX_LEN);
+# this is enforced by mynewt-nimble in esp-idf and CAN'T be bumped per-
+# characteristic without a chunked protocol. With base ~430B plus 2
+# accounts (~190B), we have ~50B for activity events. One event ~30-40B.
+# Shipping 1 keeps writes reliable; the ring buffer holds more in memory
+# for the next protocol expansion (chunked writes).
+MAX_EVENTS = 1
 
 
 @dataclass(frozen=True)

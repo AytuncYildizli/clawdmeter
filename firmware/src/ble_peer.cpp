@@ -46,9 +46,16 @@ void begin(PayloadCallback cb) {
     g_server->setCallbacks(&server_cb);
     NimBLEService* service = g_server->createService(SERVICE_UUID);
 
+    // Third arg = max value length. Default in NimBLE-Arduino is small;
+    // our payload grew with multi-account + activity feed to ~900-1000B.
+    // Bumping to 1024 unblocks the "Invalid Attribute Value Length" (0x0D)
+    // error we hit. Negotiated MTU (517) already supports long writes via
+    // the prepare-write / execute-write GATT pair, so this just raises the
+    // characteristic's declared ceiling.
     auto rx = service->createCharacteristic(
         RX_CHAR_UUID,
-        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR,
+        1024
     );
     static RxCallbacks rx_cb;
     rx->setCallbacks(&rx_cb);
