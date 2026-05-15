@@ -20,6 +20,7 @@ from .claude_probe import probe_claude
 from .codex_stub import codex_stub
 from .codex_probe import probe_codex, CODEX_LOG_PATH
 from .account_pool import AccountPool, Account
+from .activity import ActivityTracker
 
 try:
     from watchdog.observers import Observer  # type: ignore
@@ -119,6 +120,7 @@ class Orchestrator:
         self._codex_dirty = asyncio.Event()  # fsevents-driven; see _codex_watcher_loop
         self._codex_observer = None  # watchdog Observer (or None if unavailable)
         self._claude_observer = None  # watchdog Observer for ~/.claude/projects
+        self._activity = ActivityTracker()  # diffs Superset state into events
 
     def _on_connected(self) -> None:
         # Flush current state to the freshly-connected device. Writes attempted
@@ -350,8 +352,17 @@ class Orchestrator:
                 state_data = load_superset_state()
                 if state_data is not None:
                     focus = read_focus(state_data)
-                    if focus != self.state.focus:
+                    focus_changed = focus != self.state.focus
+                    if focus_changed:
                         self.state.update_focus(focus)
+                    # Diff against last snapshot; any new transitions get
+                    # appended to the activity ring buffer.
+                    new_events = self._activity.observe(state_data,
+                                                       int(__import__("time").time()))
+                    if new_events:
+                        self.state.update_activity_events(
+                            self._activity.events_for_wire())
+                    if focus_changed or new_events:
                         self._dirty.set()
             except Exception as e:
                 log.warning("superset read failed: %s", e)

@@ -44,7 +44,7 @@ void start_slide(lv_obj_t* obj, int32_t from_x, int32_t to_x,
 // Snap immediately (no animation) — used by init() and as a fallback when a
 // slide is already in flight.
 void show_only_immediate(Pager& p, Page page) {
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < kPageCount; ++i) {
         lv_obj_set_x(p.screens[i], 0);
         if (static_cast<int>(page) == i) {
             lv_obj_clear_flag(p.screens[i], LV_OBJ_FLAG_HIDDEN);
@@ -78,29 +78,42 @@ void slide_to(Pager& p, Page next, int direction) {
     start_slide(incoming, incoming_from, 0, nullptr);
 }
 
+// 3-page ring: claude(0) -> codex(1) -> activity(2) -> claude(0).
+Page next_page(Page current, int dir) {
+    int n = static_cast<int>(current) + (dir < 0 ? 1 : -1);
+    if (n < 0) n = kPageCount - 1;
+    if (n >= kPageCount) n = 0;
+    return static_cast<Page>(n);
+}
+
 }  // namespace
 
-void init(Pager& p, lv_obj_t* claude_screen, lv_obj_t* codex_screen) {
+void init(Pager& p, lv_obj_t* claude_screen, lv_obj_t* codex_screen,
+          lv_obj_t* activity_screen) {
     p.screens[0] = claude_screen;
     p.screens[1] = codex_screen;
+    p.screens[2] = activity_screen;
     show_only_immediate(p, Page::Claude);
 }
 
 void on_swipe_left(Pager& p) {
-    // Claude -> Codex (or Codex -> Claude if already on Codex)
-    Page next = (p.current == Page::Claude) ? Page::Codex : Page::Claude;
-    slide_to(p, next, -1);
+    // Forward cycle (claude -> codex -> activity -> claude).
+    slide_to(p, next_page(p.current, -1), -1);
 }
 
 void on_swipe_right(Pager& p) {
-    Page next = (p.current == Page::Codex) ? Page::Claude : Page::Codex;
-    slide_to(p, next, +1);
+    // Reverse cycle.
+    slide_to(p, next_page(p.current, +1), +1);
 }
 
 Page current(const Pager& p) { return p.current; }
 
 data::AgentKind current_agent(const Pager& p) {
-    return p.current == Page::Claude ? data::AgentKind::Claude : data::AgentKind::Codex;
+    switch (p.current) {
+        case Page::Claude: return data::AgentKind::Claude;
+        case Page::Codex:  return data::AgentKind::Codex;
+        default:           return data::AgentKind::None;
+    }
 }
 
 }  // namespace ui_pager

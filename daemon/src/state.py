@@ -25,6 +25,7 @@ class State:
     codex: dict = field(default_factory=lambda: dict(_CODEX_DEFAULT))
     focus: FocusInfo = field(default_factory=lambda: _FOCUS_DEFAULT)
     claude_accounts: list = field(default_factory=list)
+    activity_events: list = field(default_factory=list)
 
     def update_claude(self, block: dict) -> None:
         self.claude = dict(block)
@@ -40,10 +41,16 @@ class State:
         Truncated to _MAX_ACCOUNTS_ON_WIRE to bound BLE payload size."""
         self.claude_accounts = [dict(a) for a in accounts[:_MAX_ACCOUNTS_ON_WIRE]]
 
+    def update_activity_events(self, events: list[dict]) -> None:
+        """Set the multi-session activity feed. Each entry: {t, v, a, r}.
+        Newest-first. Bounded by ActivityTracker.MAX_EVENTS."""
+        self.activity_events = [dict(e) for e in events]
+
     def to_payload(self) -> dict:
         return {
             "claude": dict(self.claude),
             "codex": dict(self.codex),
             "focus": self.focus.to_dict(),
             "claude_accounts": [dict(a) for a in self.claude_accounts],
+            "activity_events": [dict(e) for e in self.activity_events],
         }

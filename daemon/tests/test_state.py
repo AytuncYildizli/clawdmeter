@@ -47,11 +47,13 @@ def test_payload_serializes_under_400_bytes():
 def test_payload_keys_match_spec():
     s = State()
     payload = s.to_payload()
-    assert set(payload.keys()) == {"claude", "codex", "focus", "claude_accounts"}
+    assert set(payload.keys()) == {"claude", "codex", "focus",
+                                   "claude_accounts", "activity_events"}
     assert set(payload["claude"].keys()) == {"s", "sr", "w", "wr", "st", "ok"}
     assert set(payload["codex"].keys()) == {"s", "sr", "w", "wr", "st", "ok"}
     assert set(payload["focus"].keys()) == {"agent", "repo", "sessions"}
     assert payload["claude_accounts"] == []
+    assert payload["activity_events"] == []
 
 
 def test_update_claude_accounts_truncates_to_max():

@@ -39,6 +39,17 @@ struct AccountSummary {
 
 constexpr int MAX_CLAUDE_ACCOUNTS = 3;
 
+// Activity feed event — emitted by the daemon's ActivityTracker on Superset
+// pane state transitions. Newest-first ordering in the array.
+struct ActivityEvent {
+    uint32_t ts_epoch = 0;  // wall-clock seconds; firmware formats as HH:MM
+    char verb = ' ';        // one of "+", "-", ">", "=" (added/removed/started/stopped)
+    char agent = 'n';       // one of "c"/"x"/"n" (claude/codex/none)
+    char repo[13] = {};     // truncated for wire compactness
+};
+
+constexpr int MAX_ACTIVITY_EVENTS = 8;
+
 struct PayloadState {
     ProviderBlock claude;
     ProviderBlock codex;
@@ -47,6 +58,9 @@ struct PayloadState {
     // Daemon ships up to 3 in priority order; firmware renders all of them.
     AccountSummary claude_accounts[MAX_CLAUDE_ACCOUNTS];
     int claude_account_count = 0;
+    // Activity feed (newest-first). Up to MAX_ACTIVITY_EVENTS recent events.
+    ActivityEvent activity_events[MAX_ACTIVITY_EVENTS];
+    int activity_event_count = 0;
     bool initialized = false;  // becomes true after the first successful parse
     // millis() timestamp of the most recent BLE payload write. 0 = never.
     // Used by the UI freshness footer (Plan #4 Task 14) to render
