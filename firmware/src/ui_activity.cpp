@@ -8,12 +8,16 @@ namespace ui_activity {
 
 namespace {
 
-constexpr int VISIBLE_ROWS = 6;  // device card fits ~6 lines comfortably
-
+// Single-event variant: BLE's 512B characteristic ceiling caps activity_events
+// at 1 per write (see daemon/activity.py MAX_EVENTS=1). Page renders the most
+// recent transition as a hero card instead of a many-line feed.
 lv_obj_t* g_screen = nullptr;
 lv_obj_t* g_card = nullptr;
 lv_obj_t* g_title = nullptr;
-lv_obj_t* g_rows[VISIBLE_ROWS] = {};
+lv_obj_t* g_time_lbl = nullptr;   // HH:MM in big font
+lv_obj_t* g_verb_lbl = nullptr;   // green/yellow/white verb glyph
+lv_obj_t* g_what_lbl = nullptr;   // "C rotator" in body font
+lv_obj_t* g_empty_lbl = nullptr;  // shown when activity_event_count==0
 
 // Map daemon's one-char verb to a 2-char visual prefix (kept ASCII because
 // Montserrat-14 subset doesn't include extended glyphs).
@@ -72,19 +76,35 @@ lv_obj_t* build(lv_obj_t* parent) {
     g_title = lv_label_create(g_card);
     lv_obj_set_style_text_color(g_title, lv_color_hex(theme::CLAUDE_ACCENT), 0);
     lv_obj_set_style_text_font(g_title, &lv_font_montserrat_16, 0);
-    lv_label_set_text(g_title, "ACTIVITY");
+    lv_label_set_text(g_title, "LATEST ACTIVITY");
     lv_obj_align(g_title, LV_ALIGN_TOP_MID, 0, 0);
 
-    // Six monospace-ish rows under the title. y stride = 28px keeps the
-    // 6 rows + title within 220-20 padding.
-    for (int i = 0; i < VISIBLE_ROWS; ++i) {
-        g_rows[i] = lv_label_create(g_card);
-        lv_obj_set_style_text_color(g_rows[i],
-                                    lv_color_hex(theme::TEXT_SECONDARY), 0);
-        lv_obj_set_style_text_font(g_rows[i], &lv_font_montserrat_14, 0);
-        lv_obj_align(g_rows[i], LV_ALIGN_TOP_LEFT, 0, 24 + i * 28);
-        lv_label_set_text(g_rows[i], "");
-    }
+    // Hero layout: time on top in big font, verb in accent color centered,
+    // "what" body text below in medium font.
+    g_time_lbl = lv_label_create(g_card);
+    lv_obj_set_style_text_font(g_time_lbl, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(g_time_lbl, lv_color_hex(theme::TEXT_PRIMARY), 0);
+    lv_label_set_text(g_time_lbl, "--:--");
+    lv_obj_align(g_time_lbl, LV_ALIGN_CENTER, 0, -20);
+
+    g_verb_lbl = lv_label_create(g_card);
+    lv_obj_set_style_text_font(g_verb_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(g_verb_lbl, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(g_verb_lbl, "");
+    lv_obj_align(g_verb_lbl, LV_ALIGN_CENTER, 0, 30);
+
+    g_what_lbl = lv_label_create(g_card);
+    lv_obj_set_style_text_font(g_what_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(g_what_lbl, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(g_what_lbl, "");
+    lv_obj_align(g_what_lbl, LV_ALIGN_CENTER, 0, 60);
+
+    g_empty_lbl = lv_label_create(g_card);
+    lv_obj_set_style_text_font(g_empty_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(g_empty_lbl, lv_color_hex(theme::TEXT_SECONDARY), 0);
+    lv_label_set_text(g_empty_lbl, "no activity yet");
+    lv_obj_align(g_empty_lbl, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_add_flag(g_empty_lbl, LV_OBJ_FLAG_HIDDEN);
 
     return g_screen;
 }
@@ -92,33 +112,44 @@ lv_obj_t* build(lv_obj_t* parent) {
 void refresh(const data::PayloadState& state) {
     if (!g_screen) return;
 
-    const int n = state.activity_event_count < VISIBLE_ROWS
-                  ? state.activity_event_count : VISIBLE_ROWS;
-    char buf[40];
+    if (state.activity_event_count == 0) {
+        // Nothing to show — hide the hero, show the empty hint.
+        lv_obj_add_flag(g_time_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_verb_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_what_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_empty_lbl, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
 
-    for (int i = 0; i < n; ++i) {
-        const auto& ev = state.activity_events[i];
-        char hhmm[8];
-        format_hhmm(ev.ts_epoch, hhmm, sizeof(hhmm));
-        std::snprintf(buf, sizeof(buf), "%s %s%c %s",
-                      hhmm, verb_glyph(ev.verb),
-                      agent_char(ev.agent), ev.repo);
-        lv_label_set_text(g_rows[i], buf);
-        // Color the row by the verb — started/stopped get accent tinting.
-        uint32_t color = theme::TEXT_SECONDARY;
-        if (ev.verb == '>') color = 0x44AA44;        // green for started
-        else if (ev.verb == '=') color = 0xFFCC00;   // yellow for stopped
-        else if (ev.verb == '+') color = theme::TEXT_PRIMARY;
-        else if (ev.verb == '-') color = 0x888888;
-        lv_obj_set_style_text_color(g_rows[i], lv_color_hex(color), 0);
+    lv_obj_add_flag(g_empty_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_time_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_verb_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_what_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    const auto& ev = state.activity_events[0];  // newest
+
+    char hhmm[8];
+    format_hhmm(ev.ts_epoch, hhmm, sizeof(hhmm));
+    lv_label_set_text(g_time_lbl, hhmm);
+
+    // Verb mapping to a readable word — better hero copy than the 1-char.
+    const char* verb_word = "";
+    uint32_t verb_color = theme::TEXT_SECONDARY;
+    switch (ev.verb) {
+        case '+': verb_word = "STARTED";  verb_color = theme::TEXT_PRIMARY; break;
+        case '-': verb_word = "CLOSED";   verb_color = 0x888888; break;
+        case '>': verb_word = "RUNNING";  verb_color = 0x44AA44; break;
+        case '=': verb_word = "PAUSED";   verb_color = 0xFFCC00; break;
+        default:  verb_word = "?";        break;
     }
-    // Clear unused rows so we don't show stale data.
-    for (int i = n; i < VISIBLE_ROWS; ++i) {
-        lv_label_set_text(g_rows[i], "");
-    }
-    if (n == 0) {
-        lv_label_set_text(g_rows[0], "no activity yet");
-    }
+    lv_label_set_text(g_verb_lbl, verb_word);
+    lv_obj_set_style_text_color(g_verb_lbl, lv_color_hex(verb_color), 0);
+
+    char what[32];
+    const char* agent_name = (ev.agent == 'c') ? "Claude"
+                            : (ev.agent == 'x') ? "Codex" : "?";
+    std::snprintf(what, sizeof(what), "%s | %s", agent_name, ev.repo);
+    lv_label_set_text(g_what_lbl, what);
 }
 
 }  // namespace ui_activity
