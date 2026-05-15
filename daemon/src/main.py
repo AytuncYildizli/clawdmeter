@@ -357,8 +357,12 @@ class Orchestrator:
                         self.state.update_focus(focus)
                     # Diff against last snapshot; any new transitions get
                     # appended to the activity ring buffer.
-                    new_events = self._activity.observe(state_data,
-                                                       int(__import__("time").time()))
+                    # Use LOCAL epoch (UTC + tz_offset) so the device's HH:MM
+                    # renders in the user's wall-clock time — the firmware
+                    # has no RTC sync and can't do the offset itself.
+                    _t = __import__("time")
+                    local_epoch = int(_t.time()) + _t.localtime().tm_gmtoff
+                    new_events = self._activity.observe(state_data, local_epoch)
                     if new_events:
                         self.state.update_activity_events(
                             self._activity.events_for_wire())

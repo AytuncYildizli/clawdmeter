@@ -16,10 +16,10 @@ _FOCUS_DEFAULT = FocusInfo(agent="none", repo="", sessions=0)
 # Per-account row in the multi-account pool. "n" = short label (<= 8 chars),
 # "s"/"w" = used percent for 5h/7d, "ok"=False on stale/expired, "a"=is_active.
 # Firmware reads up to 3 entries.
-# Wire cap on accounts in the BLE payload. NimBLE characteristic limit is
-# 512B and our active+codex+focus base is ~200B; each account row is ~95B.
-# 2 accounts (active + best backup) leaves room for activity_events.
-_MAX_ACCOUNTS_ON_WIRE = 2
+# Wire cap on accounts in the BLE payload. With chunked-write protocol, the
+# 512B-per-write ceiling no longer constrains us. 3 is the active +
+# 2 top backups (sorted by last_seen in account_pool.list_accounts).
+_MAX_ACCOUNTS_ON_WIRE = 3
 
 
 @dataclass

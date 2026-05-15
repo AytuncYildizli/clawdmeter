@@ -28,28 +28,60 @@ class BleWriter:
         self.on_refresh: Callable[[], None] | None = None
         self.on_connected: Callable[[], None] | None = None
 
+    # Chunked-write protocol — works around BLE_ATT_ATTR_MAX_LEN=512.
+    # Each chunk is a single BLE write prefixed with a 1-byte marker:
+    #   0x00 = first chunk of a logical payload (firmware resets buffer)
+    #   0x01 = middle chunk (firmware appends to buffer)
+    #   0x02 = last chunk (firmware appends then parses)
+    # Chunks must arrive in order. response=True forces CoreBluetooth to
+    # serialize writes per characteristic; subsequent write_gatt_char calls
+    # await the ack of the previous one so order is guaranteed.
+    #
+    # Per-chunk data budget: ATT_MTU=517 minus 3 bytes of ATT overhead, minus
+    # our 1-byte marker = 513 effective. We use 400 for generous headroom
+    # against negotiated MTUs that may be smaller (some macOS releases drop
+    # to 185 on first connect).
+    CHUNK_DATA_BUDGET = 400
+
     async def write_payload(self, payload: dict) -> None:
-        """Write the JSON-encoded payload to the RX characteristic.
-        Silently no-ops if not connected — the orchestrator's connection loop
-        will reconnect and the next write will go through."""
+        """Write the JSON-encoded payload to RX. Splits into chunks if
+        larger than CHUNK_DATA_BUDGET; otherwise sends as a single chunk
+        with marker=0x02. Silently no-ops if not connected."""
         client = self._client
         if client is None or not client.is_connected:
             log.debug("skip write: not connected")
             return
-        data = json.dumps(payload).encode("utf-8")
+
+        body = json.dumps(payload).encode("utf-8")
+        total_len = len(body)
+        budget = self.CHUNK_DATA_BUDGET
+        # Split body into chunks of `budget` bytes each.
+        chunks: list[bytes] = []
+        for offset in range(0, total_len, budget):
+            chunks.append(body[offset:offset + budget])
+        if not chunks:
+            chunks = [b""]
+        last = len(chunks) - 1
         try:
-            # response=True enables BLE prepared/long writes for >MTU payloads.
-            # Our payload is ~227 bytes; default ATT MTU is 23 (20 data bytes).
-            # Without long-write, write-no-response silently truncates.
-            await client.write_gatt_char(RX_CHAR_UUID, data, response=True)
-            log.info("wrote %d bytes: claude.ok=%s claude.s=%s focus.agent=%s",
-                     len(data),
+            for i, chunk in enumerate(chunks):
+                if last == 0:
+                    marker = 0x02  # single chunk -> last
+                elif i == 0:
+                    marker = 0x00  # first
+                elif i == last:
+                    marker = 0x02  # last
+                else:
+                    marker = 0x01  # middle
+                framed = bytes([marker]) + chunk
+                await client.write_gatt_char(RX_CHAR_UUID, framed, response=True)
+            log.info("wrote %d bytes in %d chunk(s): claude.ok=%s claude.s=%s focus.agent=%s",
+                     total_len, len(chunks),
                      payload.get("claude", {}).get("ok"),
                      payload.get("claude", {}).get("s"),
                      payload.get("focus", {}).get("agent"))
         except Exception as e:
-            log.warning("write failed (%d bytes): %s", len(data), e)
-            # Force a reconnect on next loop iteration
+            log.warning("chunked write failed at chunk %d/%d (%d total bytes): %s",
+                        i + 1 if 'i' in dir() else 0, len(chunks), total_len, e)
             await self._disconnect()
 
     def _handle_req_notify(self, sender, data: bytes) -> None:

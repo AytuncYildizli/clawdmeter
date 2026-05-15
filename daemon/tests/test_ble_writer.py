@@ -32,13 +32,47 @@ async def test_writer_serializes_and_writes_payload():
     payload = {"claude": {"s": 71, "ok": True}, "codex": {"ok": False}, "focus": {"agent": "claude"}}
     await writer.write_payload(payload)
 
+    # Small payload -> single chunk with marker=0x02 (last/only).
     mock_client.write_gatt_char.assert_awaited_once()
     args, kwargs = mock_client.write_gatt_char.call_args
-    # First positional or kwarg: the characteristic UUID
     char_arg = args[0] if args else kwargs.get("char_specifier")
     data_arg = args[1] if len(args) > 1 else kwargs.get("data")
     assert str(char_arg) == RX_CHAR_UUID
-    assert json.loads(data_arg.decode("utf-8")) == payload
+    # Wire format: 1-byte marker + JSON. For a single chunk the marker is 0x02.
+    assert data_arg[0] == 0x02
+    assert json.loads(data_arg[1:].decode("utf-8")) == payload
+
+
+@pytest.mark.asyncio
+async def test_writer_chunks_large_payload():
+    """A payload exceeding the chunk budget must split into multiple writes
+    with 0x00 (first) ... 0x01 (middle) ... 0x02 (last) markers."""
+    mock_client = MagicMock()
+    mock_client.write_gatt_char = AsyncMock()
+    mock_client.is_connected = True
+
+    writer = BleWriter()
+    writer._client = mock_client
+
+    # Build a payload whose JSON encoding exceeds 2 * CHUNK_DATA_BUDGET so
+    # we get at least 3 chunks (first + middle + last).
+    big_string = "x" * (writer.CHUNK_DATA_BUDGET * 3)
+    payload = {"big": big_string}
+    await writer.write_payload(payload)
+
+    calls = mock_client.write_gatt_char.call_args_list
+    assert len(calls) >= 3, f"expected >=3 chunks, got {len(calls)}"
+
+    # Markers in order: first=0x00, middles=0x01, last=0x02.
+    markers = [c.args[1][0] for c in calls]
+    assert markers[0] == 0x00
+    assert markers[-1] == 0x02
+    for m in markers[1:-1]:
+        assert m == 0x01
+
+    # Reassembling the body across chunks must equal the original JSON.
+    body = b"".join(c.args[1][1:] for c in calls)
+    assert json.loads(body.decode("utf-8")) == payload
 
 
 @pytest.mark.asyncio
